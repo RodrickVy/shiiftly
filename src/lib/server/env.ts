@@ -81,3 +81,22 @@ export function getConfig(): AppConfig {
 export function hasEmailProvider(): boolean {
 	return value(env.RESEND_API_KEY) !== null;
 }
+
+/**
+ * Whether to confirm new accounts server-side instead of emailing a link.
+ *
+ * This exists because Supabase's "Confirm email" setting lives in the
+ * dashboard, and with no email provider configured a confirmation-required
+ * project cannot complete a single signup -- the link goes nowhere.
+ *
+ * What it costs: the email address is never proven. Someone can sign up as
+ * anyone@example.com. That is acceptable while building, and for joining via
+ * an invitation (the invitation is the real gate), but it must be switched
+ * off before email is treated as identity -- for password reset to mean
+ * anything, the address has to be verified.
+ *
+ * Off unless explicitly enabled.
+ */
+export function autoConfirmSignups(): boolean {
+	return (value(env.AUTH_AUTOCONFIRM) ?? '').toLowerCase() === 'true';
+}

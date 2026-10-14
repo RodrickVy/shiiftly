@@ -1,6 +1,8 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { formError, formFailure, parseForm, signUpSchema } from '$lib/schemas';
 import { limiterKey, rateLimit } from '$lib/server/rate-limit';
+import { autoConfirmSignups } from '$lib/server/env';
+import { createServiceClient } from '$lib/server/supabase';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url }) => {
@@ -68,12 +70,55 @@ export const actions: Actions = {
 			);
 		}
 
-		// A session comes back immediately only when email confirmation is
-		// switched off for the project.
-		if (data.session) {
+		/**
+		 * With AUTH_AUTOCONFIRM on, confirm the address ourselves and sign the
+		 * person in, rather than emailing a link that cannot be delivered.
+		 * See autoConfirmSignups() for what this trades away.
+		 */
+		let session = data.session;
+		if (!session && data.user && autoConfirmSignups()) {
+			const service = createServiceClient();
+			const { error: confirmError } = await service.auth.admin.updateUserById(data.user.id, {
+				email_confirm: true
+			});
+
+			if (confirmError) {
+				return fail(
+					500,
+					formError(
+						`Your account was created but could not be activated: ${confirmError.message}`,
+						{ email: parsed.data.email }
+					)
+				);
+			}
+
+			// Establish the session on the request client so its cookies are
+			// written to this response.
+			const { data: signedIn, error: signInError } =
+				await locals.supabase.auth.signInWithPassword({
+					email: parsed.data.email,
+					password: parsed.data.password
+				});
+
+			if (signInError || !signedIn.session) {
+				// The account exists and is confirmed, so signing in is the
+				// correct next step rather than retrying signup.
+				return fail(
+					500,
+					formError('Your account was created. Please sign in to continue.', {
+						email: parsed.data.email
+					})
+				);
+			}
+			session = signedIn.session;
+		}
+
+		// A session exists either because confirmation is off for the project
+		// or because we just confirmed the account above.
+		if (session) {
 			const { error: profileError } = await locals.supabase.from('profiles').upsert(
 				{
-					id: data.session.user.id,
+					id: session.user.id,
 					full_name: parsed.data.fullName,
 					email: parsed.data.email,
 					phone: parsed.data.phone

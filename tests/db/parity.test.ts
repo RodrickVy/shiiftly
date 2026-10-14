@@ -7,17 +7,17 @@
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { createTestDb, type TestDb } from './harness';
-import { addEmployee, createOrg, createStationWithToken, randomToken, sha256 } from './fixtures';
+import { addMember, createDailyCode, createOrg, sha256, uniqueEmail } from './fixtures';
 import { payableMinutes, type BreakPolicy } from '../../src/lib/domain/attendance';
 
 let t: TestDb;
 let org: Awaited<ReturnType<typeof createOrg>>;
-let station: Awaited<ReturnType<typeof createStationWithToken>>;
+let code: Awaited<ReturnType<typeof createDailyCode>>;
 
 beforeAll(async () => {
 	t = await createTestDb();
 	org = await createOrg(t, { email: 'parity@x.test', name: 'Parity Co' });
-	station = await createStationWithToken(t, org);
+	code = await createDailyCode(t, org);
 });
 
 afterAll(async () => {
@@ -49,8 +49,8 @@ const scenarios: Scenario[] = [
 describe('SQL and TypeScript agree on payable time', () => {
 	for (const s of scenarios) {
 		it(s.label, async () => {
-			const employee = await addEmployee(t, org, {
-				email: `p-${randomToken().slice(0, 10)}@x.test`,
+			const employee = await addMember(t, org, {
+				email: uniqueEmail('parity'),
 				fullName: 'Parity Employee'
 			});
 
@@ -67,7 +67,7 @@ describe('SQL and TypeScript agree on payable time', () => {
 
 			const open = await t.asUser(employee.userId, () =>
 				t.rpc<{ ok: boolean; shift_id: string }>('public.clock_in_with_token', [
-					sha256(station.rawToken),
+					sha256(code.raw),
 					null
 				])
 			);
@@ -101,7 +101,7 @@ describe('SQL and TypeScript agree on payable time', () => {
 					gross_minutes: number;
 					unpaid_break_minutes: number;
 					payable_minutes: number;
-				}>('public.clock_out_with_token', [sha256(station.rawToken), null])
+				}>('public.clock_out_with_token', [sha256(code.raw), null])
 			);
 
 			// The same inputs, through the TypeScript implementation.

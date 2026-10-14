@@ -9,9 +9,8 @@
  *   npx supabase gen types typescript --linked > src/lib/types/database.ts
  */
 
-export type MembershipRole = 'owner' | 'manager' | 'employee';
-export type MembershipStatus = 'active' | 'inactive';
-export type InvitationRole = 'manager' | 'employee';
+export type MembershipRole = 'owner' | 'manager' | 'employee' | 'station';
+export type MembershipStatus = 'pending' | 'active' | 'inactive' | 'rejected';
 export type BreakMode = 'automatic' | 'manual' | 'none';
 export type ShiftStatus = 'active' | 'completed' | 'flagged';
 export type AttendanceEventType = 'clock_in' | 'break_start' | 'break_end' | 'clock_out';
@@ -52,6 +51,9 @@ export type Organization = {
 	logo_url: string | null;
 	week_starts_on: number;
 	workweek_days: number[];
+	join_token_hash: string | null;
+	join_token_version: number;
+	join_enabled: boolean;
 	created_by: string;
 	created_at: string;
 	updated_at: string;
@@ -89,34 +91,25 @@ export type OrganizationSettings = {
 	updated_at: string;
 }
 
-export type Invitation = {
-	id: string;
-	organization_id: string;
-	token_hash: string;
-	invited_email: string | null;
-	role: InvitationRole;
-	max_uses: number;
-	use_count: number;
-	expires_at: string;
-	revoked_at: string | null;
-	created_by: string;
-	created_at: string;
-}
-
 export type ClockingStation = {
 	id: string;
 	organization_id: string;
 	name: string;
+	description: string | null;
 	is_active: boolean;
+	/** The device account that claimed this station, once set up. */
+	membership_id: string | null;
+	claimed_at: string | null;
+	claim_token_hash: string | null;
 	created_by: string;
 	created_at: string;
 	updated_at: string;
 }
 
-export type StationDailyToken = {
+/** One clocking code per organization per local day, shared by all stations. */
+export type OrganizationDailyToken = {
 	id: string;
 	organization_id: string;
-	station_id: string;
 	local_date: string;
 	token_hash: string;
 	expires_at: string;
@@ -316,9 +309,8 @@ export type Database = {
 			organizations: Table<Organization>;
 			organization_memberships: Table<OrganizationMembership>;
 			organization_settings: Table<OrganizationSettings>;
-			invitations: Table<Invitation>;
 			clocking_stations: Table<ClockingStation>;
-			station_daily_tokens: Table<StationDailyToken>;
+			organization_daily_tokens: Table<OrganizationDailyToken>;
 			shifts: Table<Shift>;
 			attendance_events: Table<AttendanceEvent>;
 			break_records: Table<BreakRecord>;
@@ -348,8 +340,21 @@ export type Database = {
 				};
 				Returns: Json;
 			};
-			accept_invitation: {
+			request_to_join: {
 				Args: { p_token_hash: string; p_full_name: string; p_phone?: string | null };
+				Returns: Json;
+			};
+			claim_station: {
+				Args: {
+					p_token_hash: string;
+					p_user_id: string;
+					p_display_name: string;
+					p_description?: string | null;
+				};
+				Returns: Json;
+			};
+			review_join_request: {
+				Args: { p_membership: string; p_decision: 'accept' | 'reject'; p_role?: MembershipRole };
 				Returns: Json;
 			};
 			clock_in_with_token: {
@@ -413,7 +418,6 @@ export type Database = {
 		Enums: {
 			membership_role: MembershipRole;
 			membership_status: MembershipStatus;
-			invitation_role: InvitationRole;
 			break_mode: BreakMode;
 			shift_status: ShiftStatus;
 			attendance_event_type: AttendanceEventType;

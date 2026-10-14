@@ -30,6 +30,25 @@ as $$
     where m.organization_id = p_org
       and m.user_id = auth.uid()
       and m.status = 'active'
+      -- A station is a display device, not a person who works here.
+      and m.role <> 'station'
+  );
+$$;
+
+-- True when the caller is a station device account for this organization.
+create or replace function public.is_org_station(p_org uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_catalog
+as $$
+  select exists (
+    select 1 from public.organization_memberships m
+    where m.organization_id = p_org
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+      and m.role = 'station'
   );
 $$;
 
@@ -77,6 +96,7 @@ as $$
   where m.organization_id = p_org
     and m.user_id = auth.uid()
     and m.status = 'active'
+    and m.role <> 'station'
   limit 1;
 $$;
 
@@ -182,13 +202,14 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- Invitation acceptance
+-- Joining an organization
 -- ---------------------------------------------------------------------------
 
--- Validates and redeems an invitation in one transaction. The role always
--- comes from the stored invitation, never from the request, so an invitee
--- cannot promote themselves.
-create or replace function public.accept_invitation(
+-- Anyone holding the organization's join link can apply. They arrive as a
+-- pending membership with no role of consequence and no visibility into the
+-- organization; a manager decides what happens next. Nothing the applicant
+-- submits influences their permissions.
+create or replace function public.request_to_join(
   p_token_hash text,
   p_full_name text,
   p_phone text default null
@@ -201,42 +222,25 @@ as $$
 declare
   v_user uuid := auth.uid();
   v_email text;
-  v_inv public.invitations%rowtype;
-  v_membership uuid;
+  v_org public.organizations%rowtype;
   v_existing public.organization_memberships%rowtype;
+  v_membership uuid;
+  v_manager record;
 begin
   if v_user is null then
     return jsonb_build_object('ok', false, 'code', 'not_authenticated');
   end if;
 
-  select email into v_email from auth.users where id = v_user;
-
-  -- Lock so two concurrent redemptions cannot both pass the use_count check.
-  select * into v_inv
-  from public.invitations
-  where token_hash = p_token_hash
-  for update;
-
+  select * into v_org from public.organizations where join_token_hash = p_token_hash;
   if not found then
-    return jsonb_build_object('ok', false, 'code', 'invalid_invitation');
+    return jsonb_build_object('ok', false, 'code', 'invalid_link');
   end if;
 
-  if v_inv.revoked_at is not null then
-    return jsonb_build_object('ok', false, 'code', 'invitation_revoked');
+  if not v_org.join_enabled then
+    return jsonb_build_object('ok', false, 'code', 'joining_closed');
   end if;
 
-  if v_inv.expires_at <= now() then
-    return jsonb_build_object('ok', false, 'code', 'invitation_expired');
-  end if;
-
-  if v_inv.use_count >= v_inv.max_uses then
-    return jsonb_build_object('ok', false, 'code', 'invitation_exhausted');
-  end if;
-
-  if v_inv.invited_email is not null
-     and lower(v_inv.invited_email) <> lower(coalesce(v_email, '')) then
-    return jsonb_build_object('ok', false, 'code', 'invitation_email_mismatch');
-  end if;
+  select email into v_email from auth.users where id = v_user;
 
   insert into public.profiles (id, full_name, email, phone)
   values (v_user, btrim(p_full_name), coalesce(v_email, ''), nullif(btrim(coalesce(p_phone, '')), ''))
@@ -246,37 +250,185 @@ begin
 
   select * into v_existing
   from public.organization_memberships
-  where organization_id = v_inv.organization_id and user_id = v_user;
+  where organization_id = v_org.id and user_id = v_user;
 
   if found then
-    -- Re-accepting reactivates a previously removed member but never
-    -- escalates an existing role.
-    if v_existing.status = 'inactive' then
+    if v_existing.status = 'active' then
+      return jsonb_build_object('ok', true, 'already_member', true,
+                                'organization_id', v_org.id, 'status', 'active');
+    elsif v_existing.status = 'pending' then
+      return jsonb_build_object('ok', true, 'already_pending', true,
+                                'organization_id', v_org.id, 'status', 'pending');
+    elsif v_existing.status = 'rejected' then
+      -- Deliberately not reopened here: a rejected applicant re-applying
+      -- through the same link should not silently return to the queue.
+      return jsonb_build_object('ok', false, 'code', 'request_rejected');
+    else
+      -- Previously removed: let them ask again.
       update public.organization_memberships
-        set status = 'active', deactivated_at = null
+        set status = 'pending', deactivated_at = null
         where id = v_existing.id;
+      v_membership := v_existing.id;
     end if;
-    v_membership := v_existing.id;
   else
     insert into public.organization_memberships (organization_id, user_id, role, status)
-    values (v_inv.organization_id, v_user, v_inv.role::text::membership_role, 'active')
+    values (v_org.id, v_user, 'employee', 'pending')
     returning id into v_membership;
   end if;
 
-  update public.invitations
-    set use_count = use_count + 1
-    where id = v_inv.id;
+  for v_manager in
+    select user_id from public.organization_memberships
+    where organization_id = v_org.id and status = 'active' and role in ('owner', 'manager')
+  loop
+    perform public.queue_notification(
+      v_org.id, v_manager.user_id, 'join.requested',
+      'Someone asked to join',
+      coalesce(btrim(p_full_name), 'Someone') || ' asked to join ' || v_org.name || '.',
+      '/app/employees?tab=requests',
+      false
+    );
+  end loop;
+
+  return jsonb_build_object('ok', true, 'organization_id', v_org.id,
+                            'membership_id', v_membership, 'status', 'pending');
+end;
+$$;
+
+-- A manager accepts or rejects a pending applicant, choosing the role at the
+-- moment of acceptance. The role never comes from the applicant.
+create or replace function public.review_join_request(
+  p_membership uuid,
+  p_decision text,
+  p_role membership_role default 'employee'
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_row public.organization_memberships%rowtype;
+  v_org_name text;
+begin
+  if p_decision not in ('accept', 'reject') then
+    return jsonb_build_object('ok', false, 'code', 'invalid_decision');
+  end if;
+
+  -- Only an owner may mint owners or managers.
+  if p_decision = 'accept' and p_role not in ('employee', 'manager') then
+    return jsonb_build_object('ok', false, 'code', 'invalid_role');
+  end if;
+
+  select * into v_row from public.organization_memberships where id = p_membership for update;
+  if not found then
+    return jsonb_build_object('ok', false, 'code', 'not_found');
+  end if;
+
+  if not public.is_org_manager(v_row.organization_id) then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+
+  if p_role = 'manager' and not public.is_org_owner(v_row.organization_id) then
+    return jsonb_build_object('ok', false, 'code', 'owner_required_for_manager');
+  end if;
+
+  if v_row.status <> 'pending' then
+    return jsonb_build_object('ok', false, 'code', 'already_reviewed');
+  end if;
+
+  if p_decision = 'accept' then
+    update public.organization_memberships
+      set status = 'active', role = p_role, deactivated_at = null, joined_at = now()
+      where id = p_membership;
+  else
+    update public.organization_memberships
+      set status = 'rejected', deactivated_at = now()
+      where id = p_membership;
+  end if;
+
+  select name into v_org_name from public.organizations where id = v_row.organization_id;
+
+  perform public.queue_notification(
+    v_row.organization_id, v_row.user_id, 'join.' || p_decision,
+    case when p_decision = 'accept' then 'You have been accepted' else 'Request not accepted' end,
+    case when p_decision = 'accept'
+      then 'You are now part of ' || coalesce(v_org_name, 'the team') || '.'
+      else 'Your request to join ' || coalesce(v_org_name, 'the team') || ' was not accepted.'
+    end,
+    '/app',
+    false
+  );
 
   insert into public.audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
-  values (v_inv.organization_id, v_user, 'invitation.accepted', 'membership', v_membership,
-          jsonb_build_object('invitation_id', v_inv.id, 'role', v_inv.role));
+  values (v_row.organization_id, v_user, 'join.' || p_decision, 'membership', p_membership,
+          jsonb_build_object('role', p_role));
 
-  return jsonb_build_object(
-    'ok', true,
-    'organization_id', v_inv.organization_id,
-    'membership_id', v_membership,
-    'role', v_inv.role
-  );
+  return jsonb_build_object('ok', true, 'status', case when p_decision = 'accept' then 'active' else 'rejected' end);
+end;
+$$;
+
+-- Links a freshly created device account to a station.
+--
+-- The auth user is created by the server with the service role (SQL cannot
+-- create one), so this takes the user id rather than reading auth.uid(). It is
+-- never granted to `authenticated`: only server code can call it, and only
+-- after it has validated the station's setup token.
+create or replace function public.claim_station(
+  p_token_hash text,
+  p_user_id uuid,
+  p_display_name text,
+  p_description text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $$
+declare
+  v_station public.clocking_stations%rowtype;
+  v_membership uuid;
+  v_email text;
+begin
+  select * into v_station
+  from public.clocking_stations
+  where claim_token_hash = p_token_hash
+  for update;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'code', 'invalid_link');
+  end if;
+
+  if v_station.membership_id is not null then
+    return jsonb_build_object('ok', false, 'code', 'already_claimed');
+  end if;
+
+  if not v_station.is_active then
+    return jsonb_build_object('ok', false, 'code', 'station_disabled');
+  end if;
+
+  select email into v_email from auth.users where id = p_user_id;
+
+  insert into public.profiles (id, full_name, email)
+  values (p_user_id, btrim(p_display_name), coalesce(v_email, ''))
+  on conflict (id) do update set full_name = excluded.full_name;
+
+  insert into public.organization_memberships (organization_id, user_id, role, status)
+  values (v_station.organization_id, p_user_id, 'station', 'active')
+  returning id into v_membership;
+
+  update public.clocking_stations
+    set membership_id = v_membership,
+        claimed_at = now(),
+        description = coalesce(nullif(btrim(coalesce(p_description, '')), ''), description)
+    where id = v_station.id;
+
+  insert into public.audit_logs (organization_id, actor_user_id, action, entity_type, entity_id, metadata)
+  values (v_station.organization_id, p_user_id, 'station.claimed', 'station', v_station.id,
+          jsonb_build_object('name', v_station.name));
+
+  return jsonb_build_object('ok', true, 'organization_id', v_station.organization_id,
+                            'station_id', v_station.id, 'membership_id', v_membership);
 end;
 $$;
 
@@ -284,22 +436,20 @@ $$;
 -- Attendance
 -- ---------------------------------------------------------------------------
 
--- Resolves a scanned QR token to a station, enforcing organization-local day
--- validity. Returns null when the token is unknown, expired, for another day,
--- or belongs to a deactivated station.
-create or replace function public.resolve_station_token(p_token_hash text)
-returns table (station_id uuid, organization_id uuid, local_date date)
+-- Resolves a scanned QR token to an organization, enforcing organization-local
+-- day validity. Every station displays the same code, so the token identifies
+-- the organization and the day, never which screen it was read from.
+create or replace function public.resolve_org_token(p_token_hash text)
+returns table (organization_id uuid, local_date date)
 language sql
 stable
 security definer
 set search_path = public, pg_catalog
 as $$
-  select t.station_id, t.organization_id, t.local_date
-  from public.station_daily_tokens t
-  join public.clocking_stations s on s.id = t.station_id
+  select t.organization_id, t.local_date
+  from public.organization_daily_tokens t
   join public.organizations o on o.id = t.organization_id
   where t.token_hash = p_token_hash
-    and s.is_active
     and t.expires_at > now()
     and t.local_date = (now() at time zone o.timezone)::date;
 $$;
@@ -324,9 +474,12 @@ declare
   v_cached jsonb;
   v_result jsonb;
 begin
+  -- role <> 'station': a display device never records attendance of its own,
+  -- and a pending applicant is not yet staff.
   select id into v_membership
   from public.organization_memberships
-  where organization_id = p_org and user_id = v_user and status = 'active';
+  where organization_id = p_org and user_id = v_user
+    and status = 'active' and role <> 'station';
 
   if v_membership is null then
     return jsonb_build_object('ok', false, 'code', 'not_a_member');
@@ -388,7 +541,6 @@ security definer
 set search_path = public, pg_catalog
 as $$
 declare
-  v_station uuid;
   v_org uuid;
   v_enabled boolean;
 begin
@@ -396,10 +548,9 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_authenticated');
   end if;
 
-  select station_id, organization_id into v_station, v_org
-  from public.resolve_station_token(p_token_hash);
+  select organization_id into v_org from public.resolve_org_token(p_token_hash);
 
-  if v_station is null then
+  if v_org is null then
     return jsonb_build_object('ok', false, 'code', 'invalid_or_expired_token');
   end if;
 
@@ -410,7 +561,7 @@ begin
     return jsonb_build_object('ok', false, 'code', 'qr_clocking_disabled');
   end if;
 
-  return public._open_shift(v_org, v_station, 'qr', p_idempotency_key);
+  return public._open_shift(v_org, null, 'qr', p_idempotency_key);
 end;
 $$;
 
@@ -469,9 +620,12 @@ declare
   v_result jsonb;
   v_snapshot jsonb;
 begin
+  -- role <> 'station': a display device never records attendance of its own,
+  -- and a pending applicant is not yet staff.
   select id into v_membership
   from public.organization_memberships
-  where organization_id = p_org and user_id = v_user and status = 'active';
+  where organization_id = p_org and user_id = v_user
+    and status = 'active' and role <> 'station';
 
   if v_membership is null then
     return jsonb_build_object('ok', false, 'code', 'not_a_member');
@@ -580,21 +734,19 @@ security definer
 set search_path = public, pg_catalog
 as $$
 declare
-  v_station uuid;
   v_org uuid;
 begin
   if auth.uid() is null then
     return jsonb_build_object('ok', false, 'code', 'not_authenticated');
   end if;
 
-  select station_id, organization_id into v_station, v_org
-  from public.resolve_station_token(p_token_hash);
+  select organization_id into v_org from public.resolve_org_token(p_token_hash);
 
-  if v_station is null then
+  if v_org is null then
     return jsonb_build_object('ok', false, 'code', 'invalid_or_expired_token');
   end if;
 
-  return public._close_shift(v_org, v_station, 'qr', p_idempotency_key);
+  return public._close_shift(v_org, null, 'qr', p_idempotency_key);
 end;
 $$;
 
@@ -643,9 +795,12 @@ declare
   v_break uuid;
   v_now timestamptz := now();
 begin
+  -- role <> 'station': a display device never records attendance of its own,
+  -- and a pending applicant is not yet staff.
   select id into v_membership
   from public.organization_memberships
-  where organization_id = p_org and user_id = v_user and status = 'active';
+  where organization_id = p_org and user_id = v_user
+    and status = 'active' and role <> 'station';
 
   if v_membership is null then
     return jsonb_build_object('ok', false, 'code', 'not_a_member');
@@ -698,9 +853,12 @@ declare
   v_now timestamptz := now();
   v_minutes integer;
 begin
+  -- role <> 'station': a display device never records attendance of its own,
+  -- and a pending applicant is not yet staff.
   select id into v_membership
   from public.organization_memberships
-  where organization_id = p_org and user_id = v_user and status = 'active';
+  where organization_id = p_org and user_id = v_user
+    and status = 'active' and role <> 'station';
 
   if v_membership is null then
     return jsonb_build_object('ok', false, 'code', 'not_a_member');

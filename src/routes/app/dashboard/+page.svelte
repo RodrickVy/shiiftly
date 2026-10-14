@@ -37,7 +37,10 @@
 
 	const activityLabels: Record<string, string> = {
 		'organization.created': 'Organization created',
-		'invitation.accepted': 'Someone joined the team',
+		'join.requested': 'Someone asked to join',
+		'join.accept': 'A new member was accepted',
+		'join.reject': 'A join request was rejected',
+		'station.claimed': 'A station device was set up',
 		'membership.role_changed': 'A role was changed',
 		'membership.status_changed': 'A membership was activated or deactivated',
 		'time_off.approved': 'Time off approved',
@@ -106,11 +109,7 @@
 								>
 									{entry.name}
 								</a>
-								<p class="hint !mt-0 truncate">
-									Since {clockTime(entry.startedAt)}{entry.stationName
-										? ` · ${entry.stationName}`
-										: ''}
-								</p>
+								<p class="hint !mt-0 truncate">Since {clockTime(entry.startedAt)}</p>
 							</div>
 							<div class="flex shrink-0 items-center gap-3">
 								<StatusBadge state={entry.state} />

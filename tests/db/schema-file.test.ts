@@ -45,7 +45,7 @@ describe('concatenated schema', () => {
 			`select count(*)::int c from information_schema.tables
 			 where table_schema = 'public' and table_type = 'BASE TABLE'`
 		);
-		expect(tables.rows[0].c).toBe(22);
+		expect(tables.rows[0].c).toBe(21);
 
 		// Every table must end up with RLS on, however the script was run.
 		const unprotected = await db.query<{ relname: string }>(
@@ -63,7 +63,9 @@ describe('concatenated schema', () => {
 			'start_break',
 			'end_break',
 			'create_organization',
-			'accept_invitation',
+			'request_to_join',
+			'review_join_request',
+			'claim_station',
 			'submit_time_off_request',
 			'review_time_off_request',
 			'set_member_role',

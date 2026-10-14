@@ -22,8 +22,6 @@
 		{ href: '/app/timesheets', label: 'Timesheets', icon: 'timesheet' },
 		{ href: '/app/tasks', label: 'Tasks', icon: 'task' },
 		{ href: '/app/time-off', label: 'Time off', icon: 'leave' },
-		{ href: '/app/payroll', label: 'Earnings', icon: 'money' },
-		{ href: '/app/invitations', label: 'Invitations', icon: 'invite' },
 		{ href: '/app/settings', label: 'Settings', icon: 'settings' }
 	]);
 
@@ -36,9 +34,6 @@
 			{ href: '/app/my-attendance', label: 'My attendance', icon: 'calendar' as IconName },
 			{ href: '/app/my-tasks', label: 'My tasks', icon: 'task' as IconName },
 			{ href: '/app/my-time-off', label: 'My time off', icon: 'leave' as IconName },
-			data.settings.employeeEarningsVisible
-				? { href: '/app/my-earnings', label: 'My earnings', icon: 'money' as IconName }
-				: null,
 			{ href: '/app/profile', label: 'Profile', icon: 'user' as IconName }
 		].filter((i): i is NavItem => i !== null)
 	);

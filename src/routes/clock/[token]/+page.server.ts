@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { hashToken } from '$lib/domain/tokens';
-import { describeScannedToken } from '$lib/server/stations';
+import { describeScannedCode } from '$lib/server/stations';
 import { clockErrorMessage, getActiveShift } from '$lib/server/attendance';
 import { limiterKey, rateLimit } from '$lib/server/rate-limit';
 import { formError } from '$lib/schemas';
@@ -19,12 +19,12 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// hooks.server.ts. Reaching this point means there is a user.
 	if (!locals.user) throw redirect(303, `/login?next=/clock/${params.token}`);
 
-	const scan = await describeScannedToken(locals.supabase, params.token);
+	const scan = await describeScannedCode(params.token);
 
 	if (!scan.ok) {
 		return {
 			valid: false as const,
-			station: null,
+			organizationName: null,
 			action: null,
 			shift: null,
 			idempotencyKey: null
@@ -39,6 +39,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		.eq('organization_id', scan.organizationId)
 		.eq('user_id', locals.user.id)
 		.eq('status', 'active')
+		.neq('role', 'station')
 		.maybeSingle();
 
 	const membership = membershipRow as OrganizationMembership | null;
@@ -47,7 +48,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		return {
 			valid: true as const,
 			notAMember: true,
-			station: { name: scan.stationName, organizationName: scan.organizationName },
+			organizationName: scan.organizationName,
 			action: null,
 			shift: null,
 			idempotencyKey: null
@@ -59,7 +60,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	return {
 		valid: true as const,
 		notAMember: false,
-		station: { name: scan.stationName, organizationName: scan.organizationName },
+		organizationName: scan.organizationName,
 		// On a break the employee must end it first, so no action is offered.
 		action: shift ? (shift.onBreakSince ? null : ('clock_out' as const)) : ('clock_in' as const),
 		shift: shift ? { startedAt: shift.startedAt, onBreakSince: shift.onBreakSince } : null,

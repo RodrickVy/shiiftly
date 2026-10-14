@@ -7,8 +7,7 @@
 		{ href: '/app/attendance', label: 'Attendance', icon: 'calendar', hint: 'Review and correct recorded hours' },
 		{ href: '/app/timesheets', label: 'Timesheets', icon: 'timesheet', hint: 'Approve hours for a period' },
 		{ href: '/app/tasks', label: 'Tasks', icon: 'task', hint: 'Assign work and track progress' },
-		{ href: '/app/payroll', label: 'Earnings', icon: 'money', hint: 'Estimated pay and CSV export' },
-		{ href: '/app/invitations', label: 'Invitations', icon: 'invite', hint: 'Invite people to join' },
+		{ href: '/app/station', label: 'Stations', icon: 'station', hint: 'Screens your team scans' },
 		{ href: '/app/settings', label: 'Settings', icon: 'settings', hint: 'Breaks, clocking and notifications' }
 	];
 

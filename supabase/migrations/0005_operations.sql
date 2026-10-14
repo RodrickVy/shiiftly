@@ -33,7 +33,7 @@ returns trigger
 language plpgsql
 as $$
 begin
-  if new.status = 'inactive' then
+  if new.status in ('inactive', 'rejected') then
     new.deactivated_at := coalesce(new.deactivated_at, now());
   else
     new.deactivated_at := null;
@@ -361,6 +361,18 @@ begin
   -- Only an owner may change roles at all, and only an owner may mint owners.
   if not public.is_org_owner(v_row.organization_id) then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+
+  -- Station accounts are device logins, not staff. Converting either way
+  -- would give a tablet a person's permissions, or strip a person of theirs.
+  if p_role = 'station' or v_row.role = 'station' then
+    return jsonb_build_object('ok', false, 'code', 'station_role_fixed');
+  end if;
+
+  -- A pending applicant is accepted through review_join_request, which is
+  -- where the role is chosen; changing it here would skip that decision.
+  if v_row.status = 'pending' then
+    return jsonb_build_object('ok', false, 'code', 'still_pending');
   end if;
 
   begin

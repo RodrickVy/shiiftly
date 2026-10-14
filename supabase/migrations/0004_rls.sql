@@ -15,9 +15,8 @@ alter table public.profiles                enable row level security;
 alter table public.organizations           enable row level security;
 alter table public.organization_memberships enable row level security;
 alter table public.organization_settings   enable row level security;
-alter table public.invitations             enable row level security;
 alter table public.clocking_stations       enable row level security;
-alter table public.station_daily_tokens    enable row level security;
+alter table public.organization_daily_tokens enable row level security;
 alter table public.shifts                  enable row level security;
 alter table public.attendance_events       enable row level security;
 alter table public.break_records           enable row level security;
@@ -68,6 +67,10 @@ create policy profiles_update_self on public.profiles
 create policy organizations_select_members on public.organizations
   for select using (public.is_org_member(id));
 
+-- A station device renders the organization name on the clocking screen.
+create policy organizations_select_station on public.organizations
+  for select using (public.is_org_station(id));
+
 create policy organizations_update_owner on public.organizations
   for update using (public.is_org_owner(id)) with check (public.is_org_owner(id));
 
@@ -97,20 +100,6 @@ create policy settings_update_managers on public.organization_settings
   with check (public.is_org_manager(organization_id));
 
 -- ---------------------------------------------------------------------------
--- invitations  (managers only; redemption goes through accept_invitation)
--- ---------------------------------------------------------------------------
-
-create policy invitations_select_managers on public.invitations
-  for select using (public.is_org_manager(organization_id));
-
-create policy invitations_insert_managers on public.invitations
-  for insert with check (public.is_org_manager(organization_id));
-
-create policy invitations_update_managers on public.invitations
-  for update using (public.is_org_manager(organization_id))
-  with check (public.is_org_manager(organization_id));
-
--- ---------------------------------------------------------------------------
 -- stations and daily tokens
 -- ---------------------------------------------------------------------------
 
@@ -121,9 +110,14 @@ create policy stations_write_managers on public.clocking_stations
   for all using (public.is_org_manager(organization_id))
   with check (public.is_org_manager(organization_id));
 
--- Only managers may read token rows. Employees never need them: scanning goes
--- through resolve_station_token(), which is SECURITY DEFINER.
-create policy station_tokens_managers on public.station_daily_tokens
+-- A station device may read its own row, and nothing else in the table.
+create policy stations_select_self on public.clocking_stations
+  for select using (public.is_own_membership(membership_id));
+
+-- Only managers may read token rows. Nobody needs to: the code is rendered
+-- server-side, and scanning goes through resolve_org_token(), which is
+-- SECURITY DEFINER.
+create policy organization_tokens_managers on public.organization_daily_tokens
   for select using (public.is_org_manager(organization_id));
 
 -- ---------------------------------------------------------------------------

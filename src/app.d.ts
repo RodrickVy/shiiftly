@@ -1,6 +1,6 @@
 import type { Session, User } from '@supabase/supabase-js';
 import type { Db } from '$lib/server/supabase';
-import type { OrgContext } from '$lib/server/context';
+import type { OrgContext, PendingJoin } from '$lib/server/context';
 
 declare global {
 	namespace App {
@@ -17,6 +17,8 @@ declare global {
 			user: User | null;
 			/** Resolved active organization, membership and settings. */
 			org: OrgContext | null;
+			/** Set when the user has only a pending or rejected application. */
+			pendingJoin: PendingJoin | null;
 			/** True when required environment variables are present. */
 			configured: boolean;
 		}

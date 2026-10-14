@@ -36,6 +36,13 @@ create table public.organizations (
   -- 0 = Sunday .. 6 = Saturday
   week_starts_on smallint not null default 1 check (week_starts_on between 0 and 6),
   workweek_days smallint[] not null default '{1,2,3,4,5}',
+  -- The shareable join link. The raw token is derived from the id and the
+  -- version (see deriveJoinToken), so a manager can redisplay it any time
+  -- while only its hash is stored. Bumping the version invalidates the old
+  -- link without touching anything else.
+  join_token_hash text unique,
+  join_token_version integer not null default 1,
+  join_enabled boolean not null default true,
   created_by uuid not null references auth.users (id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -50,7 +57,8 @@ create table public.organization_memberships (
   organization_id uuid not null references public.organizations (id) on delete cascade,
   user_id uuid not null references auth.users (id) on delete cascade,
   role membership_role not null default 'employee',
-  status membership_status not null default 'active',
+  -- Someone joining through the link starts pending a manager's decision.
+  status membership_status not null default 'pending',
   employee_code text,
   job_title text,
   department text,
@@ -60,8 +68,9 @@ create table public.organization_memberships (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint memberships_unique_user unique (organization_id, user_id),
+  -- deactivated_at marks when access ended, for either reason.
   constraint memberships_deactivated_consistent
-    check ((status = 'inactive') = (deactivated_at is not null))
+    check ((status in ('inactive', 'rejected')) = (deactivated_at is not null))
 );
 
 create unique index memberships_employee_code_unique
@@ -98,30 +107,6 @@ create trigger organization_settings_touch
   for each row execute function public.touch_updated_at();
 
 -- ---------------------------------------------------------------------------
--- Invitations
--- ---------------------------------------------------------------------------
-
-create table public.invitations (
-  id uuid primary key default gen_random_uuid(),
-  organization_id uuid not null references public.organizations (id) on delete cascade,
-  -- Only the hash is stored; the raw token lives in the invite link alone.
-  token_hash text not null unique,
-  -- Null means a reusable link invitation; set means the link is bound to
-  -- this address and only that address may redeem it.
-  invited_email text,
-  role invitation_role not null default 'employee',
-  max_uses integer not null default 1 check (max_uses between 1 and 500),
-  use_count integer not null default 0 check (use_count >= 0),
-  expires_at timestamptz not null,
-  revoked_at timestamptz,
-  created_by uuid not null references auth.users (id),
-  created_at timestamptz not null default now(),
-  constraint invitations_uses_within_max check (use_count <= max_uses)
-);
-
-create index invitations_by_org on public.invitations (organization_id, created_at desc);
-
--- ---------------------------------------------------------------------------
 -- Clocking stations and their daily QR tokens
 -- ---------------------------------------------------------------------------
 
@@ -129,7 +114,15 @@ create table public.clocking_stations (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations (id) on delete cascade,
   name text not null check (length(btrim(name)) between 1 and 80),
+  description text,
   is_active boolean not null default true,
+  -- The device account that claimed this station, once someone opens its
+  -- setup link and creates one. Null until then.
+  membership_id uuid unique references public.organization_memberships (id) on delete set null,
+  claimed_at timestamptz,
+  -- Setup link for the device that will run this station. Hash only, same
+  -- reasoning as the join link.
+  claim_token_hash text unique,
   created_by uuid not null references auth.users (id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -141,20 +134,22 @@ create trigger clocking_stations_touch
   before update on public.clocking_stations
   for each row execute function public.touch_updated_at();
 
-create table public.station_daily_tokens (
+-- One code per organization per local day, so every station device displays
+-- exactly the same thing. A scan therefore identifies the organization and
+-- the day, not which screen it came from.
+create table public.organization_daily_tokens (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations (id) on delete cascade,
-  station_id uuid not null references public.clocking_stations (id) on delete cascade,
-  -- The organization-local calendar day this token is valid for.
   local_date date not null,
   token_hash text not null,
   expires_at timestamptz not null,
   created_at timestamptz not null default now(),
-  constraint station_daily_tokens_unique_day unique (station_id, local_date)
+  constraint organization_daily_tokens_unique_day unique (organization_id, local_date)
 );
 
 -- Lookup path used on every scan.
-create unique index station_daily_tokens_hash on public.station_daily_tokens (token_hash);
+create unique index organization_daily_tokens_hash
+  on public.organization_daily_tokens (token_hash);
 
 -- ---------------------------------------------------------------------------
 -- Attendance

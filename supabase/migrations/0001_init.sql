@@ -6,9 +6,15 @@
 -- token, and so the schema stays portable across Postgres builds that do not
 -- ship pgcrypto. gen_random_uuid() is Postgres core since v13.
 
-create type membership_role as enum ('owner', 'manager', 'employee');
-create type membership_status as enum ('active', 'inactive');
-create type invitation_role as enum ('manager', 'employee');
+-- 'station' is a device account: it can display the clocking code and
+-- nothing else. It is a role rather than a separate table so that one
+-- membership check covers every tenant-scoped query.
+create type membership_role as enum ('owner', 'manager', 'employee', 'station');
+
+-- Someone who signed up through the join link waits as 'pending' until a
+-- manager decides. 'rejected' is kept rather than deleted so the same person
+-- cannot quietly re-apply and slip through unnoticed.
+create type membership_status as enum ('pending', 'active', 'inactive', 'rejected');
 create type break_mode as enum ('automatic', 'manual', 'none');
 create type shift_status as enum ('active', 'completed', 'flagged');
 create type attendance_event_type as enum ('clock_in', 'break_start', 'break_end', 'clock_out');

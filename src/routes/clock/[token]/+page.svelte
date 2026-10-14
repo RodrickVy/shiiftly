@@ -75,7 +75,7 @@
 			</div>
 		{:else if data.notAMember}
 			<div class="text-center">
-				<h1 class="text-xl font-bold">You are not a member of {data.station?.organizationName}</h1>
+				<h1 class="text-xl font-bold">You are not a member of {data.organizationName}</h1>
 				<p class="hint">
 					Ask a manager there to send you an invitation link, then scan this code again.
 				</p>
@@ -83,8 +83,8 @@
 			</div>
 		{:else}
 			<header class="text-center">
-				<p class="hint !mt-0">{data.station?.organizationName}</p>
-				<h1 class="text-lg font-semibold">{data.station?.name}</h1>
+				<p class="hint !mt-0">{data.organizationName}</p>
+				<h1 class="text-lg font-semibold">Clock in or out</h1>
 			</header>
 
 			{#if form?.errors?._form}

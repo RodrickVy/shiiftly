@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
 	import Alert from '$lib/components/ui/Alert.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
@@ -13,69 +12,44 @@
 	let { data, form }: PageProps = $props();
 
 	let showAdd = $state(false);
-	let pending = $state(false);
-	let now = $state(new Date());
+	let pending = $state('');
+	let copied = $state('');
 
-	// A visible clock reassures whoever is watching the screen that it is live.
-	$effect(() => {
-		const id = setInterval(() => (now = new Date()), 1000);
-		return () => clearInterval(id);
-	});
-
-	const localTime = $derived(
-		new Intl.DateTimeFormat('en-GB', {
-			timeZone: data.timezone,
-			hour: '2-digit',
-			minute: '2-digit',
-			second: '2-digit',
-			hour12: false
-		}).format(now)
-	);
-
-	const localDateLabel = $derived(
-		new Intl.DateTimeFormat('en-GB', {
-			timeZone: data.timezone,
-			weekday: 'long',
-			day: 'numeric',
-			month: 'long',
-			year: 'numeric'
-		}).format(now)
-	);
-
-	// The code is valid until the next local midnight; refresh when it passes.
-	const expired = $derived(data.qr ? new Date(data.qr.expiresAt) <= now : false);
-	$effect(() => {
-		if (expired) void invalidateAll();
-	});
-
-	function timeAt(iso: string): string {
-		return new Intl.DateTimeFormat('en-GB', {
-			timeZone: data.timezone,
-			hour: '2-digit',
-			minute: '2-digit',
-			hour12: false
-		}).format(new Date(iso));
+	async function copy(text: string, key: string) {
+		try {
+			await navigator.clipboard.writeText(text);
+			copied = key;
+			setTimeout(() => (copied = ''), 2500);
+		} catch {
+			copied = '';
+		}
 	}
+
+	const enhanceFor = (key: string) => () => {
+		pending = key;
+		return async ({ update }: { update: () => Promise<void> }) => {
+			await update();
+			pending = '';
+		};
+	};
 </script>
 
-<svelte:head><title>Clocking station — Shiftly</title></svelte:head>
+<svelte:head><title>Stations — Shiftly</title></svelte:head>
 
-<div class="mx-auto max-w-5xl px-4 py-5">
-	<header class="mb-5 flex flex-wrap items-start justify-between gap-3">
+<div class="mx-auto max-w-4xl px-4 py-5">
+	<header class="mb-4 flex flex-wrap items-start justify-between gap-3">
 		<div>
-			<h1 class="text-xl font-bold">Clocking station</h1>
-			<p class="hint">Staff scan this code to clock in or out.</p>
+			<h1 class="text-xl font-bold">Clocking stations</h1>
+			<p class="hint">Screens your team scans. Every station shows the same code.</p>
 		</div>
-		<div class="flex flex-wrap gap-2">
-			{#if data.selected}
-				<a href="/app/station/display/{data.selected.id}" class="btn btn-secondary">
-					<Icon name="expand" size={18} />
-					Fullscreen
-				</a>
-			{/if}
+		<div class="flex gap-2">
+			<a href="/station" class="btn btn-secondary">
+				<Icon name="expand" size={18} />
+				Open display
+			</a>
 			<button type="button" class="btn btn-primary" onclick={() => (showAdd = true)}>
 				<Icon name="plus" size={18} />
-				Add station
+				Create station
 			</button>
 		</div>
 	</header>
@@ -84,141 +58,151 @@
 		<div class="mb-4"><Alert tone="danger">{form.errors._form.join(' ')}</Alert></div>
 	{/if}
 
+	{#if form?.created}
+		<div class="mb-4">
+			<Card title="Station created">
+				<p class="hint !mt-0">
+					Open this link <strong>on the device</strong> that will show the code. It creates a
+					sign-in for that device and nothing else.
+				</p>
+				<div class="mt-3 flex flex-col gap-2 sm:flex-row">
+					<input class="input font-mono text-xs" readonly value={form.setupUrl} />
+					<button
+						type="button"
+						class="btn btn-primary shrink-0"
+						onclick={() => copy(form.setupUrl, 'new')}
+					>
+						{copied === 'new' ? 'Copied' : 'Copy link'}
+					</button>
+				</div>
+			</Card>
+		</div>
+	{/if}
+
 	{#if !data.qrEnabled}
 		<div class="mb-4">
 			<Alert tone="warn" title="QR clocking is switched off">
-				Staff cannot clock in by scanning until you enable it in
-				<a href="/app/settings" class="underline">Settings</a>.
+				Stations will display a code, but scanning it will be refused until you enable QR
+				clocking in <a href="/app/settings" class="underline">Settings</a>.
 			</Alert>
 		</div>
 	{/if}
 
-	{#if data.stations.filter((s) => s.is_active).length > 1}
-		<div class="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Stations">
-			{#each data.stations.filter((s) => s.is_active) as station (station.id)}
-				<a
-					href="/app/station?station={station.id}"
-					class="btn {data.selected?.id === station.id ? 'btn-primary' : 'btn-secondary'}"
-					role="tab"
-					aria-selected={data.selected?.id === station.id}
+	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+		<Card padded={false} title="Your stations">
+			{#if data.stations.length === 0}
+				<EmptyState
+					title="No stations yet"
+					description="A station is a phone or tablet left at the door showing the code."
 				>
-					{station.name}
-				</a>
-			{/each}
-		</div>
-	{/if}
-
-	{#if !data.selected}
-		<Card>
-			<EmptyState
-				title="No active station yet"
-				description="A station is the screen your team scans. Most businesses have one, at the entrance."
-			>
-				<button type="button" class="btn btn-primary" onclick={() => (showAdd = true)}>
-					Add your first station
-				</button>
-			</EmptyState>
-		</Card>
-	{:else}
-		<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-			<!-- The code itself -->
-			<section class="card px-5 py-6 text-center">
-				<p class="hint !mt-0">{data.org?.name}</p>
-				<h2 class="text-lg font-semibold">{data.selected.name}</h2>
-				<p class="hint">{localDateLabel}</p>
-				<p class="tnum mt-1 text-3xl font-bold">{localTime}</p>
-
-				{#if data.qr}
-					<div class="mt-5 flex justify-center">
-						<img
-							src={data.qr.dataUrl}
-							alt="QR code for clocking in and out at {data.selected.name}"
-							class="h-auto w-full max-w-xs rounded-xl border bg-white p-3"
-							style="border-color: var(--border)"
-						/>
-					</div>
-
-					<div class="mt-4 flex flex-col items-center gap-2">
-						{#if expired}
-							<span class="badge badge-danger">Expired — refreshing</span>
-						{:else}
-							<span class="badge badge-ok">Valid today only</span>
-						{/if}
-						<p class="hint !mt-0">
-							This code stops working at midnight {data.timezone.replace(/_/g, ' ')}.
-						</p>
-					</div>
-				{/if}
-
-				<p class="hint mx-auto mt-5 max-w-sm">
-					Scanning records attendance conveniently. It is not proof that someone was present:
-					a code on a screen can be photographed and shared.
-				</p>
-			</section>
-
-			<!-- Activity -->
-			<div class="flex flex-col gap-4">
-				<Card title="Recent scans" subtitle="At this station">
-					{#if data.recentScans.length === 0}
-						<p class="hint !mt-0">No scans yet today.</p>
-					{:else}
-						<ul class="-my-1 divide-y" style="border-color: var(--border)">
-							{#each data.recentScans as scan (scan.id)}
-								<li class="flex items-center justify-between gap-3 py-2">
-									<div class="min-w-0">
-										<p class="truncate text-sm font-medium">{scan.name}</p>
-										<p class="hint !mt-0">
-											{scan.eventType === 'clock_in' ? 'Clocked in' : 'Clocked out'}
-										</p>
+					<button type="button" class="btn btn-primary" onclick={() => (showAdd = true)}>
+						Create your first station
+					</button>
+				</EmptyState>
+			{:else}
+				<ul class="divide-y" style="border-color: var(--border)">
+					{#each data.stations as station (station.id)}
+						<li class="px-4 py-3 sm:px-5">
+							<div class="flex flex-wrap items-start justify-between gap-3">
+								<div class="min-w-0">
+									<p class="font-medium">{station.name}</p>
+									{#if station.description}
+										<p class="hint !mt-0">{station.description}</p>
+									{/if}
+									<div class="mt-1.5 flex flex-wrap gap-2">
+										<span class="badge {station.isActive ? 'badge-ok' : 'badge-muted'}">
+											{station.isActive ? 'Enabled' : 'Disabled'}
+										</span>
+										<span class="badge {station.claimed ? 'badge-info' : 'badge-warn'}">
+											{station.claimed ? 'Device linked' : 'Awaiting setup'}
+										</span>
 									</div>
-									<span class="tnum shrink-0 text-sm" style="color: var(--text-muted)">
-										{timeAt(scan.occurredAt)}
-									</span>
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				</Card>
+								</div>
 
-				<Card title="Station">
-					<p class="text-sm font-medium">{data.selected.name}</p>
-					<p class="hint !mt-0">Active</p>
-					<form
-						method="POST"
-						action="?/deactivateStation"
-						class="mt-3"
-						use:enhance={() => {
-							pending = true;
-							return async ({ update }) => {
-								await update();
-								pending = false;
-							};
-						}}
-					>
-						<input type="hidden" name="stationId" value={data.selected.id} />
-						<SubmitButton {pending} variant="secondary" pendingLabel="Deactivating...">
-							Deactivate station
-						</SubmitButton>
-					</form>
-					<p class="hint">
-						Deactivating stops new scans. Recorded attendance is kept.
-					</p>
-				</Card>
-			</div>
-		</div>
-	{/if}
+								<div class="flex shrink-0 flex-wrap gap-1">
+									<form
+										method="POST"
+										action="?/setActive"
+										use:enhance={enhanceFor(station.id)}
+									>
+										<input type="hidden" name="stationId" value={station.id} />
+										<input type="hidden" name="active" value={String(!station.isActive)} />
+										<button
+											type="submit"
+											class="btn btn-ghost !min-h-0 !px-2 !py-1 text-sm"
+											disabled={pending === station.id}
+										>
+											{station.isActive ? 'Disable' : 'Enable'}
+										</button>
+									</form>
+
+									{#if station.claimed}
+										<form
+											method="POST"
+											action="?/unlink"
+											use:enhance={enhanceFor(station.id)}
+										>
+											<input type="hidden" name="stationId" value={station.id} />
+											<button
+												type="submit"
+												class="btn btn-ghost !min-h-0 !px-2 !py-1 text-sm"
+												style="color: var(--danger)"
+												disabled={pending === station.id}
+											>
+												Unlink device
+											</button>
+										</form>
+									{/if}
+								</div>
+							</div>
+
+							{#if station.setupUrl}
+								<div class="mt-3 flex flex-col gap-2 sm:flex-row">
+									<input class="input font-mono text-xs" readonly value={station.setupUrl} />
+									<button
+										type="button"
+										class="btn btn-secondary shrink-0"
+										onclick={() => copy(station.setupUrl ?? '', station.id)}
+									>
+										{copied === station.id ? 'Copied' : 'Copy setup link'}
+									</button>
+								</div>
+								<p class="hint">Open on the device that will display the code.</p>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</Card>
+
+		<Card title="Today's code" subtitle="Identical on every station">
+			<img
+				src={data.preview.dataUrl}
+				alt="The clocking code currently shown on every station"
+				class="mx-auto h-auto w-full max-w-[12rem] rounded-xl border bg-white p-2"
+				style="border-color: var(--border)"
+			/>
+			<p class="hint mt-3">
+				Expires at midnight {data.timezone.replace(/_/g, ' ')}, then renews automatically.
+			</p>
+			<p class="hint">
+				A code on a screen can be photographed, so treat scanning as convenient, not as proof
+				somebody was present.
+			</p>
+		</Card>
+	</div>
 </div>
 
-<Modal bind:open={showAdd} title="Add a clocking station">
+<Modal bind:open={showAdd} title="Create a station">
 	<form
 		method="POST"
-		action="?/createStation"
-		id="add-station-form"
+		action="?/create"
+		id="station-form"
 		use:enhance={() => {
-			pending = true;
+			pending = 'create';
 			return async ({ update }) => {
-				await update();
-				pending = false;
+				await update({ reset: false });
+				pending = '';
 				showAdd = false;
 			};
 		}}
@@ -226,7 +210,7 @@
 		<Field
 			label="Station name"
 			name="name"
-			hint="Where the screen will be, e.g. Front entrance or Workshop door."
+			hint="Where the screen will live, e.g. Front entrance."
 			error={form?.errors?.name}
 			required
 		>
@@ -234,7 +218,6 @@
 				<input
 					{id}
 					name="name"
-					type="text"
 					class="input"
 					required
 					maxlength="80"
@@ -243,14 +226,22 @@
 				/>
 			{/snippet}
 		</Field>
+
+		<Field label="Description" name="description" hint="Optional." error={form?.errors?.description}>
+			{#snippet children({ id, describedBy })}
+				<input {id} name="description" class="input" maxlength="200" aria-describedby={describedBy} />
+			{/snippet}
+		</Field>
+
+		<p class="hint !mt-0">
+			You will get a setup link to open on the device itself.
+		</p>
 	</form>
 
 	{#snippet footer()}
-		<button type="button" class="btn btn-secondary" onclick={() => (showAdd = false)}>
-			Cancel
-		</button>
-		<button type="submit" form="add-station-form" class="btn btn-primary" disabled={pending}>
-			Add station
-		</button>
+		<button type="button" class="btn btn-secondary" onclick={() => (showAdd = false)}>Cancel</button>
+		<SubmitButton pending={pending === 'create'} form="station-form" pendingLabel="Creating...">
+			Create station
+		</SubmitButton>
 	{/snippet}
 </Modal>

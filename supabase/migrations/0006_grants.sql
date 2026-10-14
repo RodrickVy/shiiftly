@@ -19,9 +19,8 @@ grant select on
   public.organizations,
   public.organization_memberships,
   public.organization_settings,
-  public.invitations,
   public.clocking_stations,
-  public.station_daily_tokens,
+  public.organization_daily_tokens,
   public.shifts,
   public.attendance_events,
   public.break_records,
@@ -46,7 +45,6 @@ grant insert, update on public.profiles to authenticated;
 grant update on public.organizations to authenticated;
 grant update on public.organization_memberships to authenticated;
 grant update on public.organization_settings to authenticated;
-grant insert, update on public.invitations to authenticated;
 grant insert, update, delete on public.clocking_stations to authenticated;
 grant insert, update on public.timesheets to authenticated;
 grant insert, update on public.attendance_adjustments to authenticated;
@@ -82,13 +80,15 @@ grant insert, update on public.time_off_requests to authenticated;
 
 grant execute on function
   public.is_org_member(uuid),
+  public.is_org_station(uuid),
   public.is_org_manager(uuid),
   public.is_org_owner(uuid),
   public.current_membership_id(uuid),
   public.is_own_membership(uuid),
   public.manages_membership(uuid),
   public.create_organization(text, text, text, text, text, smallint, smallint[]),
-  public.accept_invitation(text, text, text),
+  public.request_to_join(text, text, text),
+  public.review_join_request(uuid, text, membership_role),
   public.clock_in_with_token(text, text),
   public.clock_in_direct(uuid, text),
   public.clock_out_with_token(text, text),
@@ -109,5 +109,8 @@ revoke execute on function
   public._open_shift(uuid, uuid, text, text),
   public._close_shift(uuid, uuid, text, text),
   public.queue_notification(uuid, uuid, text, text, text, text, boolean),
-  public.resolve_station_token(text)
+  public.resolve_org_token(text),
+  -- Server-only: the caller must already have validated the setup token, and
+  -- the auth user it links is created with the service role.
+  public.claim_station(text, uuid, text, text)
 from public, anon, authenticated;

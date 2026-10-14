@@ -7,7 +7,7 @@
  * falls back to one they do.
  */
 import type { RequestEvent } from '@sveltejs/kit';
-import type { Db } from './supabase';
+import { createServiceClient, type Db } from './supabase';
 import type {
 	MembershipRole,
 	Organization,
@@ -22,6 +22,12 @@ export interface MembershipSummary {
 	organizationId: string;
 	organizationName: string;
 	role: MembershipRole;
+}
+
+export interface PendingJoin {
+	organizationId: string;
+	organizationName: string;
+	status: 'pending' | 'rejected';
 }
 
 export interface OrgContext {
@@ -100,5 +106,33 @@ function defaultSettings(organizationId: string): OrganizationSettings {
 		notify_managers_on_time_off: true,
 		notify_employee_on_decision: true,
 		updated_at: new Date().toISOString()
+	};
+}
+
+/**
+ * An application still waiting on a manager, when the user has no active
+ * membership anywhere.
+ *
+ * Read with the service client because a pending applicant is deliberately
+ * invisible to RLS -- they can see their own membership row, but not the
+ * organization it points at, so the name has to come from here.
+ */
+export async function loadPendingJoin(userId: string): Promise<PendingJoin | null> {
+	const { data } = await createServiceClient()
+		.from('organization_memberships')
+		.select('organization_id, status, organizations(name)')
+		.eq('user_id', userId)
+		.in('status', ['pending', 'rejected'])
+		.order('created_at', { ascending: false })
+		.limit(1)
+		.maybeSingle();
+
+	if (!data) return null;
+	const org = data.organizations as unknown as { name: string } | null;
+
+	return {
+		organizationId: data.organization_id,
+		organizationName: org?.name ?? 'that team',
+		status: data.status as 'pending' | 'rejected'
 	};
 }

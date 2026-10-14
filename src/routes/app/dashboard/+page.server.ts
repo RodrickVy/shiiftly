@@ -34,9 +34,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// (an overnight shift started yesterday is still "on shift" now).
 		supabase
 			.from('shifts')
-			.select(
-				'id, employee_membership_id, started_at, ended_at, status, payable_minutes, station_id, clocking_stations(name)'
-			)
+			.select('id, employee_membership_id, started_at, ended_at, status, payable_minutes')
 			.eq('organization_id', orgId)
 			.or(`started_at.gte.${dayStart},status.eq.active`)
 			.order('started_at', { ascending: false }),
@@ -89,8 +87,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		ended_at: string | null;
 		status: string;
 		payable_minutes: number | null;
-		station_id: string | null;
-		clocking_stations: { name: string } | null;
 	};
 	const shifts = (shiftRows ?? []) as unknown as ShiftRow[];
 	const activeShifts = shifts.filter((s) => s.status === 'active');
@@ -121,7 +117,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			membershipId: s.employee_membership_id,
 			name: nameOf.get(s.employee_membership_id) ?? 'Unnamed',
 			startedAt: s.started_at,
-			stationName: s.clocking_stations?.name ?? null,
 			onBreakSince,
 			state: (onBreakSince ? 'on_break' : 'working') as 'on_break' | 'working',
 			// Live preview using the policy that will be applied at clock-out.

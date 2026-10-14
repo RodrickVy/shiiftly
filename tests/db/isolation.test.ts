@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { createTestDb, type TestDb } from './harness';
-import { addEmployee, createOrg, createStationWithToken, randomToken, sha256 } from './fixtures';
+import { addMember, createDailyCode, createOrg, createStation, sha256 } from './fixtures';
 
 /**
  * These tests drive the database through the `authenticated` role with a real
@@ -13,44 +13,43 @@ let t: TestDb;
 
 // Organization A
 let orgA: Awaited<ReturnType<typeof createOrg>>;
-let alice: Awaited<ReturnType<typeof addEmployee>>;
-let bob: Awaited<ReturnType<typeof addEmployee>>;
-let managerA: Awaited<ReturnType<typeof addEmployee>>;
+let alice: Awaited<ReturnType<typeof addMember>>;
+let bob: Awaited<ReturnType<typeof addMember>>;
+let managerA: Awaited<ReturnType<typeof addMember>>;
 
 // Organization B
 let orgB: Awaited<ReturnType<typeof createOrg>>;
-let carol: Awaited<ReturnType<typeof addEmployee>>;
+let carol: Awaited<ReturnType<typeof addMember>>;
 
 beforeAll(async () => {
 	t = await createTestDb();
 
 	orgA = await createOrg(t, { email: 'owner-a@x.test', name: 'Alpha Retail' });
-	alice = await addEmployee(t, orgA, { email: 'alice@x.test', fullName: 'Alice A' });
-	bob = await addEmployee(t, orgA, { email: 'bob@x.test', fullName: 'Bob B' });
-	managerA = await addEmployee(t, orgA, {
+	alice = await addMember(t, orgA, { email: 'alice@x.test', fullName: 'Alice A' });
+	bob = await addMember(t, orgA, { email: 'bob@x.test', fullName: 'Bob B' });
+	managerA = await addMember(t, orgA, {
 		email: 'mgr-a@x.test',
 		fullName: 'Manager A',
 		role: 'manager'
 	});
 
 	orgB = await createOrg(t, { email: 'owner-b@x.test', name: 'Beta Logistics' });
-	carol = await addEmployee(t, orgB, { email: 'carol@x.test', fullName: 'Carol C' });
+	carol = await addMember(t, orgB, { email: 'carol@x.test', fullName: 'Carol C' });
 
 	// Give Alice and Carol one completed shift each.
 	for (const [org, emp] of [
 		[orgA, alice],
 		[orgB, carol]
 	] as const) {
-		const station = await createStationWithToken(t, org);
+		const code = await createDailyCode(t, org);
 		const open = await t.asUser(emp.userId, () =>
-			t.rpc<{ shift_id: string }>('public.clock_in_with_token', [sha256(station.rawToken), null])
+			t.rpc<{ shift_id: string }>('public.clock_in_with_token', [sha256(code.raw), null])
 		);
-		await t.q(
-			`update public.shifts set started_at = now() - interval '4 hours' where id = $1`,
-			[open.shift_id]
-		);
+		await t.q(`update public.shifts set started_at = now() - interval '4 hours' where id = $1`, [
+			open.shift_id
+		]);
 		await t.asUser(emp.userId, () =>
-			t.rpc('public.clock_out_with_token', [sha256(station.rawToken), null])
+			t.rpc('public.clock_out_with_token', [sha256(code.raw), null])
 		);
 	}
 });
@@ -141,11 +140,33 @@ describe('cross-organization isolation', () => {
 		expect(stations.every((r) => r.organization_id === orgB.orgId)).toBe(true);
 	});
 
-	it('station tokens are not readable by employees at all', async () => {
+	it('clocking codes are not readable by employees at all', async () => {
 		const rows = await t.asUser(alice.userId, () =>
-			t.q(`select token_hash from public.station_daily_tokens`)
+			t.q(`select token_hash from public.organization_daily_tokens`)
 		);
 		expect(rows).toEqual([]);
+	});
+
+	/** A tablet by the door must not become a window into the business. */
+	it('a station device can read nothing but its own station row', async () => {
+		const station = await createStation(t, orgA, { name: 'Lobby screen' });
+
+		const shifts = await t.asUser(station.userId, () => t.q(`select id from public.shifts`));
+		expect(shifts).toEqual([]);
+
+		const people = await t.asUser(station.userId, () =>
+			t.q(`select id from public.organization_memberships`)
+		);
+		// Only its own membership row, via the "own membership" policy.
+		expect(people.length).toBeLessThanOrEqual(1);
+
+		const codes = await t.asUser(station.userId, () =>
+			t.q(`select token_hash from public.organization_daily_tokens`)
+		);
+		expect(codes).toEqual([]);
+
+		const rates = await t.asUser(station.userId, () => t.q(`select id from public.pay_rates`));
+		expect(rates).toEqual([]);
 	});
 });
 
@@ -186,7 +207,7 @@ describe('privilege escalation', () => {
 	it('an employee cannot approve their own time-off request', async () => {
 		// A dedicated employee, so an earlier promotion in this file cannot
 		// make the assertion vacuous.
-		const dave = await addEmployee(t, orgA, { email: 'dave@x.test', fullName: 'Dave D' });
+		const dave = await addMember(t, orgA, { email: 'dave@x.test', fullName: 'Dave D' });
 
 		const submitted = await t.asUser(dave.userId, () =>
 			t.rpc<{ request_id: string }>('public.submit_time_off_request', [

@@ -1,18 +1,17 @@
 /**
- * Station QR tokens.
+ * Derived tokens.
  *
- * A station's token for a given organization-local day is *derived*, not
- * stored: HMAC(secret, "<station>:<date>"). That means the server can
- * regenerate today's token on demand -- no nightly job -- while the database
- * only ever holds its SHA-256 hash. A database leak therefore does not hand
- * anyone a working clock-in code.
+ * Every token here is computed from a stable identifier plus a server secret
+ * rather than stored: the database holds only a SHA-256 hash. That means a
+ * manager can redisplay a QR code tomorrow, the server can recompute today's
+ * clocking code with no nightly job, and a database leak hands an attacker
+ * hashes instead of working codes.
  *
- * Rotating QR_TOKEN_SECRET invalidates every outstanding code, which is the
- * intended behaviour for a secret rotation.
+ * Rotating QR_TOKEN_SECRET invalidates every outstanding token at once, which
+ * is the intended behaviour for a secret rotation.
  *
- * Security note, deliberately repeated in the UI: a code that is valid for a
- * whole day can be photographed and shared. This is a convenience mechanism,
- * not proof that someone stood in the building.
+ * Each kind of token is domain-separated by its prefix, so a token minted for
+ * one purpose can never validate as another.
  */
 
 const encoder = new TextEncoder();
@@ -30,21 +29,7 @@ function toHex(bytes: ArrayBuffer): string {
 		.join('');
 }
 
-/** SHA-256 of a token, hex encoded. This is what the database stores. */
-export async function hashToken(raw: string): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', encoder.encode(raw));
-	return toHex(digest);
-}
-
-/**
- * The raw token for a station on an organization-local date.
- * Deterministic, so the same day always yields the same code.
- */
-export async function deriveStationToken(
-	secret: string,
-	stationId: string,
-	localDate: string
-): Promise<string> {
+async function hmac(secret: string, message: string): Promise<string> {
 	const key = await crypto.subtle.importKey(
 		'raw',
 		encoder.encode(secret),
@@ -52,8 +37,49 @@ export async function deriveStationToken(
 		false,
 		['sign']
 	);
-	const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(`${stationId}:${localDate}`));
-	return toBase64Url(signature);
+	return toBase64Url(await crypto.subtle.sign('HMAC', key, encoder.encode(message)));
+}
+
+/** SHA-256 of a token, hex encoded. This is what the database stores. */
+export async function hashToken(raw: string): Promise<string> {
+	return toHex(await crypto.subtle.digest('SHA-256', encoder.encode(raw)));
+}
+
+/**
+ * The clocking code for an organization on a given local date.
+ *
+ * Organization-wide by design: every station device displays exactly the same
+ * code, so staff can scan whichever screen is nearest. A scan therefore
+ * identifies the organization and the day, not the screen.
+ */
+export async function deriveOrgDailyToken(
+	secret: string,
+	organizationId: string,
+	localDate: string
+): Promise<string> {
+	return hmac(secret, `clock:${organizationId}:${localDate}`);
+}
+
+/**
+ * The organization's join link token.
+ *
+ * Versioned so a manager can invalidate a leaked link by bumping
+ * organizations.join_token_version, without disturbing anything else.
+ */
+export async function deriveJoinToken(
+	secret: string,
+	organizationId: string,
+	version: number
+): Promise<string> {
+	return hmac(secret, `join:${organizationId}:${version}`);
+}
+
+/** The one-time setup link a device uses to become a station. */
+export async function deriveStationClaimToken(
+	secret: string,
+	stationId: string
+): Promise<string> {
+	return hmac(secret, `station:${stationId}`);
 }
 
 /** A cryptographically random token. */
@@ -63,42 +89,7 @@ export function randomToken(byteLength = 32): string {
 	return toBase64Url(bytes.buffer);
 }
 
-/**
- * The raw token for an invitation, derived from its row id.
- *
- * Derived rather than random for the same reason station codes are: a manager
- * needs to be able to put an invitation QR code back on screen tomorrow, and
- * the database must still hold only a hash. The invitation's id is a v4 UUID,
- * so it carries no guessable structure, and without the secret the token
- * cannot be computed from it.
- *
- * Revocation and expiry are properties of the row, not the token, so
- * re-deriving a token for a revoked invitation still fails validation.
- */
-export async function deriveInvitationToken(
-	secret: string,
-	invitationId: string
-): Promise<string> {
-	const key = await crypto.subtle.importKey(
-		'raw',
-		encoder.encode(secret),
-		{ name: 'HMAC', hash: 'SHA-256' },
-		false,
-		['sign']
-	);
-	const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(`invite:${invitationId}`));
-	return toBase64Url(signature);
-}
-
-/** The URL an invitation QR code encodes. */
-export function invitationUrl(origin: string, rawToken: string): string {
-	return `${origin.replace(/\/$/, '')}/invite/${rawToken}`;
-}
-
-/**
- * Constant-time string comparison, for the rare places we compare a secret
- * value in application code rather than by indexed hash lookup.
- */
+/** Constant-time string comparison. */
 export function timingSafeEqual(a: string, b: string): boolean {
 	if (a.length !== b.length) return false;
 	let diff = 0;
@@ -106,7 +97,19 @@ export function timingSafeEqual(a: string, b: string): boolean {
 	return diff === 0;
 }
 
-/** Shape of what a station QR code encodes: an absolute URL to the clock page. */
-export function stationClockUrl(origin: string, rawToken: string): string {
-	return `${origin.replace(/\/$/, '')}/clock/${rawToken}`;
+const base = (origin: string) => origin.replace(/\/$/, '');
+
+/** What a station screen's QR code encodes. */
+export function clockUrl(origin: string, rawToken: string): string {
+	return `${base(origin)}/clock/${rawToken}`;
+}
+
+/** What the join QR code and shareable link point at. */
+export function joinUrl(origin: string, rawToken: string): string {
+	return `${base(origin)}/join/${rawToken}`;
+}
+
+/** What a station's setup link points at. */
+export function stationClaimUrl(origin: string, rawToken: string): string {
+	return `${base(origin)}/station/setup/${rawToken}`;
 }

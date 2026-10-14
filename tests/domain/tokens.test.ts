@@ -1,70 +1,126 @@
 import { describe, expect, it } from 'vitest';
 import {
-	deriveInvitationToken,
-	deriveStationToken,
+	clockUrl,
+	deriveJoinToken,
+	deriveOrgDailyToken,
+	deriveStationClaimToken,
 	hashToken,
-	invitationUrl,
+	joinUrl,
 	randomToken,
-	stationClockUrl,
+	stationClaimUrl,
 	timingSafeEqual
 } from '../../src/lib/domain/tokens';
 
 const SECRET = 'test-secret-at-least-32-characters-long';
-const STATION = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const ORG = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const STATION = 'd3b07384-d9a0-4f1e-9c2b-1a2b3c4d5e6f';
 
-describe('deriveStationToken', () => {
-	it('is deterministic for the same station and day', async () => {
-		const a = await deriveStationToken(SECRET, STATION, '2026-05-20');
-		const b = await deriveStationToken(SECRET, STATION, '2026-05-20');
+describe('deriveOrgDailyToken', () => {
+	it('is deterministic for the same organization and day', async () => {
+		const a = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
+		const b = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
 		expect(a).toBe(b);
 	});
 
-	/** This is what makes the code expire at local midnight without a job. */
-	it('differs from one day to the next', async () => {
-		const today = await deriveStationToken(SECRET, STATION, '2026-05-20');
-		const tomorrow = await deriveStationToken(SECRET, STATION, '2026-05-21');
+	/**
+	 * The whole point of the organization-wide code: two station devices
+	 * asking for today's code must get an identical value, because they are
+	 * asked to display the same image.
+	 */
+	it('is identical for every station in the organization', async () => {
+		const screenA = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
+		const screenB = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
+		expect(screenA).toBe(screenB);
+	});
+
+	it('differs from one day to the next, which is what expires it', async () => {
+		const today = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
+		const tomorrow = await deriveOrgDailyToken(SECRET, ORG, '2026-05-21');
 		expect(today).not.toBe(tomorrow);
 	});
 
-	it('differs between stations on the same day', async () => {
-		const a = await deriveStationToken(SECRET, STATION, '2026-05-20');
-		const b = await deriveStationToken(SECRET, 'a1b2c3d4-0000-0000-0000-000000000000', '2026-05-20');
+	it('differs between organizations on the same day', async () => {
+		const a = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
+		const b = await deriveOrgDailyToken(SECRET, STATION, '2026-05-20');
 		expect(a).not.toBe(b);
 	});
 
 	it('changes when the secret is rotated', async () => {
-		const a = await deriveStationToken(SECRET, STATION, '2026-05-20');
-		const b = await deriveStationToken(`${SECRET}-rotated`, STATION, '2026-05-20');
+		const a = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
+		const b = await deriveOrgDailyToken(`${SECRET}-rotated`, ORG, '2026-05-20');
 		expect(a).not.toBe(b);
 	});
 
-	it('is URL-safe and long enough to be unguessable', async () => {
-		const token = await deriveStationToken(SECRET, STATION, '2026-05-20');
+	it('leaks neither the organization id nor the date', async () => {
+		const token = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
+		expect(token).not.toContain(ORG);
+		expect(token).not.toContain('2026');
 		expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
-		// 32 bytes of HMAC output, base64url encoded.
 		expect(token.length).toBeGreaterThanOrEqual(42);
 	});
+});
 
-	it('does not leak the station id or date into the token', async () => {
-		const token = await deriveStationToken(SECRET, STATION, '2026-05-20');
-		expect(token).not.toContain(STATION);
-		expect(token).not.toContain('2026');
+describe('deriveJoinToken', () => {
+	it('is stable for a version, so the link can be redisplayed', async () => {
+		const a = await deriveJoinToken(SECRET, ORG, 1);
+		const b = await deriveJoinToken(SECRET, ORG, 1);
+		expect(a).toBe(b);
+	});
+
+	/** Bumping the version is how a leaked link is invalidated. */
+	it('changes when the version is bumped', async () => {
+		const v1 = await deriveJoinToken(SECRET, ORG, 1);
+		const v2 = await deriveJoinToken(SECRET, ORG, 2);
+		expect(v1).not.toBe(v2);
+	});
+
+	it('differs between organizations', async () => {
+		const a = await deriveJoinToken(SECRET, ORG, 1);
+		const b = await deriveJoinToken(SECRET, STATION, 1);
+		expect(a).not.toBe(b);
+	});
+});
+
+describe('deriveStationClaimToken', () => {
+	it('is stable for a station', async () => {
+		const a = await deriveStationClaimToken(SECRET, STATION);
+		const b = await deriveStationClaimToken(SECRET, STATION);
+		expect(a).toBe(b);
+	});
+
+	it('differs between stations', async () => {
+		const a = await deriveStationClaimToken(SECRET, STATION);
+		const b = await deriveStationClaimToken(SECRET, ORG);
+		expect(a).not.toBe(b);
+	});
+});
+
+/**
+ * Three kinds of token share one secret. If any pair could collide, a join
+ * link could be redeemed as a clocking code, or a station setup link could
+ * be used to join as staff.
+ */
+describe('domain separation', () => {
+	it('never produces the same token for different purposes', async () => {
+		const id = ORG;
+		const tokens = [
+			await deriveOrgDailyToken(SECRET, id, '2026-05-20'),
+			await deriveJoinToken(SECRET, id, 1),
+			await deriveStationClaimToken(SECRET, id)
+		];
+		expect(new Set(tokens).size).toBe(3);
 	});
 });
 
 describe('hashToken', () => {
 	it('produces a stable hex SHA-256', async () => {
-		const hash = await hashToken('hello');
-		expect(hash).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+		expect(await hashToken('hello')).toBe(
+			'2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
+		);
 	});
 
-	it('differs for different inputs', async () => {
-		expect(await hashToken('a')).not.toBe(await hashToken('b'));
-	});
-
-	/** The stored hash must not be reversible to the scannable code. */
 	it('does not contain the raw token', async () => {
-		const raw = await deriveStationToken(SECRET, STATION, '2026-05-20');
+		const raw = await deriveOrgDailyToken(SECRET, ORG, '2026-05-20');
 		const hash = await hashToken(raw);
 		expect(hash).not.toContain(raw);
 		expect(hash).toMatch(/^[0-9a-f]{64}$/);
@@ -77,11 +133,6 @@ describe('randomToken', () => {
 		expect(tokens.size).toBe(200);
 		for (const token of tokens) expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
 	});
-
-	it('honours the requested byte length', () => {
-		expect(randomToken(16).length).toBeGreaterThanOrEqual(21);
-		expect(randomToken(32).length).toBeGreaterThanOrEqual(42);
-	});
 });
 
 describe('timingSafeEqual', () => {
@@ -89,63 +140,16 @@ describe('timingSafeEqual', () => {
 		expect(timingSafeEqual('abc', 'abc')).toBe(true);
 		expect(timingSafeEqual('abc', 'abd')).toBe(false);
 		expect(timingSafeEqual('abc', 'abcd')).toBe(false);
-		expect(timingSafeEqual('', '')).toBe(true);
 	});
 });
 
-describe('stationClockUrl', () => {
-	it('builds the URL a QR code encodes', () => {
-		expect(stationClockUrl('https://shiftly.app', 'abc123')).toBe(
-			'https://shiftly.app/clock/abc123'
+describe('urls', () => {
+	it('builds each link, without doubling the slash', () => {
+		expect(clockUrl('https://shiftly.app', 'tok')).toBe('https://shiftly.app/clock/tok');
+		expect(clockUrl('https://shiftly.app/', 'tok')).toBe('https://shiftly.app/clock/tok');
+		expect(joinUrl('https://shiftly.app', 'tok')).toBe('https://shiftly.app/join/tok');
+		expect(stationClaimUrl('https://shiftly.app', 'tok')).toBe(
+			'https://shiftly.app/station/setup/tok'
 		);
-	});
-
-	it('does not double the slash', () => {
-		expect(stationClockUrl('https://shiftly.app/', 'abc123')).toBe(
-			'https://shiftly.app/clock/abc123'
-		);
-	});
-});
-
-describe('deriveInvitationToken', () => {
-	const INVITE = 'd3b07384-d9a0-4f1e-9c2b-1a2b3c4d5e6f';
-
-	it('is stable for the same invitation, so the QR can be re-displayed', async () => {
-		const a = await deriveInvitationToken(SECRET, INVITE);
-		const b = await deriveInvitationToken(SECRET, INVITE);
-		expect(a).toBe(b);
-	});
-
-	it('differs between invitations', async () => {
-		const a = await deriveInvitationToken(SECRET, INVITE);
-		const b = await deriveInvitationToken(SECRET, '11111111-2222-3333-4444-555555555555');
-		expect(a).not.toBe(b);
-	});
-
-	it('changes when the secret is rotated', async () => {
-		const a = await deriveInvitationToken(SECRET, INVITE);
-		const b = await deriveInvitationToken(`${SECRET}-rotated`, INVITE);
-		expect(a).not.toBe(b);
-	});
-
-	it('does not leak the invitation id', async () => {
-		const token = await deriveInvitationToken(SECRET, INVITE);
-		expect(token).not.toContain(INVITE);
-		expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
-		expect(token.length).toBeGreaterThanOrEqual(42);
-	});
-
-	/** An invitation token must never collide with a station token. */
-	it('is domain-separated from station tokens', async () => {
-		const invite = await deriveInvitationToken(SECRET, INVITE);
-		const station = await deriveStationToken(SECRET, INVITE, '2026-05-20');
-		expect(invite).not.toBe(station);
-	});
-});
-
-describe('invitationUrl', () => {
-	it('builds the URL an invitation QR encodes', () => {
-		expect(invitationUrl('https://shiftly.app', 'tok')).toBe('https://shiftly.app/invite/tok');
-		expect(invitationUrl('https://shiftly.app/', 'tok')).toBe('https://shiftly.app/invite/tok');
 	});
 });

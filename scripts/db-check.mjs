@@ -49,9 +49,8 @@ const TABLES = [
 	'organizations',
 	'organization_memberships',
 	'organization_settings',
-	'invitations',
 	'clocking_stations',
-	'station_daily_tokens',
+	'organization_daily_tokens',
 	'shifts',
 	'attendance_events',
 	'break_records',
@@ -88,7 +87,18 @@ const FUNCTIONS = {
 		p_timezone: 'Africa/Nairobi',
 		p_currency_code: 'KES'
 	},
-	accept_invitation: { p_token_hash: 'probe', p_full_name: 'probe', p_phone: null },
+	request_to_join: { p_token_hash: 'probe', p_full_name: 'probe', p_phone: null },
+	review_join_request: {
+		p_membership: '00000000-0000-0000-0000-000000000000',
+		p_decision: 'accept',
+		p_role: 'employee'
+	},
+	claim_station: {
+		p_token_hash: 'probe',
+		p_user_id: '00000000-0000-0000-0000-000000000000',
+		p_display_name: 'probe',
+		p_description: null
+	},
 	submit_time_off_request: {
 		p_org: '00000000-0000-0000-0000-000000000000',
 		p_leave_type: 'Vacation',
@@ -142,13 +152,13 @@ if (missingFns.length) console.log(`  missing: ${missingFns.join(', ')}`);
 
 if (missingTables.length === 0) {
 	const counts = {};
-	for (const table of ['organizations', 'organization_memberships', 'shifts', 'invitations']) {
+	for (const table of ['organizations', 'organization_memberships', 'shifts', 'clocking_stations']) {
 		const { count } = await db.from(table).select('*', { head: true, count: 'exact' });
 		counts[table] = count ?? 0;
 	}
 	console.log(
 		`\nData       ${counts.organizations} orgs, ${counts.organization_memberships} members, ` +
-			`${counts.shifts} shifts, ${counts.invitations} invitations`
+			`${counts.shifts} shifts, ${counts.clocking_stations} stations`
 	);
 }
 

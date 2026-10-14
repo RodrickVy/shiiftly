@@ -108,7 +108,6 @@ export const handle: Handle = async ({ event, resolve }) => {
 		// A signed-in user with no organization has one job: onboarding.
 		const needsOnboarding = !event.locals.org;
 		const onOnboarding = pathname.startsWith('/onboarding');
-		const onInvite = pathname.startsWith('/invite/');
 
 		if (needsOnboarding && pathname.startsWith('/app')) {
 			throw redirect(303, '/onboarding/organization');
@@ -116,8 +115,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 		if (!needsOnboarding && onOnboarding && !pathname.startsWith('/onboarding/setup')) {
 			throw redirect(303, event.locals.org!.isManager ? '/app/dashboard' : '/app/home');
 		}
-		if ((pathname === '/login' || pathname === '/signup') && !onInvite) {
-			throw redirect(303, needsOnboarding ? '/onboarding/organization' : '/app');
+		if (pathname === '/login' || pathname === '/signup') {
+			// Honour ?next= so an already-signed-in person who follows an
+			// invitation or a scanned station link still lands where they
+			// were headed, rather than being dumped on the dashboard.
+			const next = event.url.searchParams.get('next');
+			const safeNext = next && next.startsWith('/') && !next.startsWith('//') ? next : null;
+			throw redirect(303, safeNext ?? (needsOnboarding ? '/onboarding/organization' : '/app'));
 		}
 
 		// Role check for manager-only pages.

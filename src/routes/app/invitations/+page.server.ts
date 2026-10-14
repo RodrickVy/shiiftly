@@ -1,6 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { createInvitationSchema, formError, formFailure, parseForm } from '$lib/schemas';
-import { hashToken, randomToken } from '$lib/domain/tokens';
+import { deriveInvitationToken, hashToken, invitationUrl } from '$lib/domain/tokens';
+import { getConfig } from '$lib/server/env';
 import { sendDirectEmail } from '$lib/server/email';
 import { hasEmailProvider } from '$lib/server/env';
 import { limiterKey, rateLimit } from '$lib/server/rate-limit';
@@ -68,12 +69,19 @@ export const actions: Actions = {
 			return fail(403, formError('Only the owner can invite managers.'));
 		}
 
-		// The raw token exists only in the link; the row keeps its hash.
-		const raw = randomToken();
+		/**
+		 * The token is derived from the row id, so the QR code can be put
+		 * back on screen tomorrow without the database ever storing a working
+		 * link. The id is generated here so the token and its hash can be
+		 * written in a single insert.
+		 */
+		const invitationId = crypto.randomUUID();
+		const raw = await deriveInvitationToken(getConfig().qrTokenSecret, invitationId);
 		const tokenHash = await hashToken(raw);
 		const expiresAt = new Date(Date.now() + parsed.data.expiresInDays * 86_400_000);
 
 		const { error: insertError } = await locals.supabase.from('invitations').insert({
+			id: invitationId,
 			organization_id: org.organization.id,
 			token_hash: tokenHash,
 			invited_email: parsed.data.email || null,
@@ -87,7 +95,7 @@ export const actions: Actions = {
 			return fail(500, formError(`Could not create the invitation: ${insertError.message}`));
 		}
 
-		const link = `${url.origin}/invite/${raw}`;
+		const link = invitationUrl(url.origin, raw);
 		let emailed: 'sent' | 'failed' | 'skipped' = 'skipped';
 
 		if (parsed.data.email) {
@@ -102,9 +110,7 @@ export const actions: Actions = {
 			emailed = result.ok ? 'sent' : 'failed';
 		}
 
-		// The link is returned once, here, so the manager can copy it. It is
-		// never recoverable afterwards.
-		return { created: true as const, link, emailed };
+		return { created: true as const, link, emailed, invitationId };
 	},
 
 	revoke: async ({ request, locals }) => {

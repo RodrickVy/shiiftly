@@ -126,6 +126,8 @@ describe('form parsing', () => {
 			formOf({
 				fullName: 'Amina Yusuf',
 				email: 'Amina@Example.COM',
+				phoneDial: '+254',
+				phoneNumber: '0712345678',
 				password: 'correct-horse-battery',
 				confirmPassword: 'correct-horse-battery'
 			})
@@ -140,6 +142,8 @@ describe('form parsing', () => {
 			formOf({
 				fullName: 'Amina Yusuf',
 				email: 'a@b.test',
+				phoneDial: '+254',
+				phoneNumber: '0712345678',
 				password: 'correct-horse-battery',
 				confirmPassword: 'something-else-here'
 			})
@@ -155,6 +159,8 @@ describe('form parsing', () => {
 			formOf({
 				fullName: 'A',
 				email: 'nope',
+				phoneDial: '+254',
+				phoneNumber: '0712345678',
 				password: 'secret-password-value',
 				confirmPassword: 'secret-password-value'
 			})

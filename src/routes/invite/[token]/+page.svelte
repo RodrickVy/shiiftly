@@ -4,6 +4,7 @@
 	import AuthShell from '$lib/components/auth/AuthShell.svelte';
 	import Alert from '$lib/components/ui/Alert.svelte';
 	import Field from '$lib/components/ui/Field.svelte';
+	import PhoneField from '$lib/components/ui/PhoneField.svelte';
 	import SubmitButton from '$lib/components/ui/SubmitButton.svelte';
 	import type { PageProps } from './$types';
 
@@ -101,27 +102,13 @@
 				{/snippet}
 			</Field>
 
-			<Field
-				label="Phone number"
-				name="phone"
-				hint="Optional. International format, e.g. +254712345678."
-				error={form?.errors?.phone}
-			>
-				{#snippet children({ id, describedBy, invalid })}
-					<input
-						{id}
-						name="phone"
-						type="tel"
-						class="input"
-						autocomplete="tel"
-						inputmode="tel"
-						placeholder="+254712345678"
-						aria-invalid={invalid}
-						aria-describedby={describedBy}
-						value={form?.values?.phone ?? ''}
-					/>
-				{/snippet}
-			</Field>
+			<PhoneField
+				required
+				hint="Your manager uses this to reach you about shifts."
+				error={form?.errors?.phoneNumber}
+				dial={form?.values?.phoneDial ?? '+254'}
+				value={form?.values?.phoneNumber ?? ''}
+			/>
 
 			<SubmitButton {pending} pendingLabel="Joining..." size="btn-lg" fullWidth>
 				Join {data.preview.organizationName}

@@ -3,6 +3,7 @@
 	import AuthShell from '$lib/components/auth/AuthShell.svelte';
 	import Alert from '$lib/components/ui/Alert.svelte';
 	import Field from '$lib/components/ui/Field.svelte';
+	import PhoneField from '$lib/components/ui/PhoneField.svelte';
 	import SubmitButton from '$lib/components/ui/SubmitButton.svelte';
 	import type { PageProps } from './$types';
 
@@ -70,6 +71,14 @@
 					/>
 				{/snippet}
 			</Field>
+
+			<PhoneField
+				required
+				hint="We use this to reach you about shifts. Local format is fine."
+				error={form?.errors?.phoneNumber}
+				dial={form?.values?.phoneDial ?? '+254'}
+				value={form?.values?.phoneNumber ?? ''}
+			/>
 
 			<Field
 				label="Password"

@@ -33,7 +33,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			{
 				id: user.id,
 				full_name: (user.user_metadata?.full_name as string) ?? user.email ?? 'New user',
-				email: user.email ?? ''
+				email: user.email ?? '',
+				// Captured at signup; only reaches the profile once confirmed.
+				phone: (user.user_metadata?.phone as string) ?? null
 			},
 			{ onConflict: 'id' }
 		);

@@ -14,8 +14,9 @@
     "test:watch": "vitest",
     "test:unit": "vitest run tests/domain",
     "test:db": "vitest run tests/db",
-    "db:reset": "node scripts/db-apply.mjs --print",
-    "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --threshold error"
+    "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --threshold error",
+    "db:schema": "node scripts/db-apply.mjs",
+    "db:check": "node scripts/db-check.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

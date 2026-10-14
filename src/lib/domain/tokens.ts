@@ -56,11 +56,43 @@ export async function deriveStationToken(
 	return toBase64Url(signature);
 }
 
-/** A cryptographically random token, used for invitation links. */
+/** A cryptographically random token. */
 export function randomToken(byteLength = 32): string {
 	const bytes = new Uint8Array(byteLength);
 	crypto.getRandomValues(bytes);
 	return toBase64Url(bytes.buffer);
+}
+
+/**
+ * The raw token for an invitation, derived from its row id.
+ *
+ * Derived rather than random for the same reason station codes are: a manager
+ * needs to be able to put an invitation QR code back on screen tomorrow, and
+ * the database must still hold only a hash. The invitation's id is a v4 UUID,
+ * so it carries no guessable structure, and without the secret the token
+ * cannot be computed from it.
+ *
+ * Revocation and expiry are properties of the row, not the token, so
+ * re-deriving a token for a revoked invitation still fails validation.
+ */
+export async function deriveInvitationToken(
+	secret: string,
+	invitationId: string
+): Promise<string> {
+	const key = await crypto.subtle.importKey(
+		'raw',
+		encoder.encode(secret),
+		{ name: 'HMAC', hash: 'SHA-256' },
+		false,
+		['sign']
+	);
+	const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(`invite:${invitationId}`));
+	return toBase64Url(signature);
+}
+
+/** The URL an invitation QR code encodes. */
+export function invitationUrl(origin: string, rawToken: string): string {
+	return `${origin.replace(/\/$/, '')}/invite/${rawToken}`;
 }
 
 /**

@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 import { isValidTimeZone } from '$lib/domain/time';
+import { normalizePhone, phoneErrorMessage } from '$lib/domain/phone';
 
 /** E.164, which is what the database CHECK constraint enforces. */
 export const phoneSchema = z
@@ -20,6 +21,51 @@ export const optionalPhone = z
 	.nullable();
 
 export const emailSchema = z.email('Enter a valid email address').trim().toLowerCase();
+
+/**
+ * A dial code plus a locally-typed number, normalised to E.164.
+ *
+ * Validation lives here rather than in a regex on the raw input so that
+ * `0712 345 678` and `+254 712 345 678` are both accepted and stored
+ * identically -- the database CHECK constraint only ever sees E.164.
+ */
+export const phoneFieldsSchema = z
+	.object({
+		phoneDial: z.string().trim().default('+254'),
+		phoneNumber: z.string().trim()
+	})
+	.transform((v, ctx) => {
+		const result = normalizePhone(v.phoneDial, v.phoneNumber);
+		if (!result.ok) {
+			ctx.addIssue({
+				code: 'custom',
+				message: phoneErrorMessage(result.reason),
+				path: ['phoneNumber']
+			});
+			return z.NEVER;
+		}
+		return result.e164;
+	});
+
+/** The same, but an empty number means "not provided" rather than invalid. */
+export const optionalPhoneFieldsSchema = z
+	.object({
+		phoneDial: z.string().trim().default('+254'),
+		phoneNumber: z.string().trim()
+	})
+	.transform((v, ctx) => {
+		if (v.phoneNumber === '') return null;
+		const result = normalizePhone(v.phoneDial, v.phoneNumber);
+		if (!result.ok) {
+			ctx.addIssue({
+				code: 'custom',
+				message: phoneErrorMessage(result.reason),
+				path: ['phoneNumber']
+			});
+			return z.NEVER;
+		}
+		return result.e164;
+	});
 
 export const passwordSchema = z
 	.string()
@@ -40,12 +86,26 @@ export const signUpSchema = z
 	.object({
 		fullName: fullNameSchema,
 		email: emailSchema,
+		phoneDial: z.string().trim().default('+254'),
+		phoneNumber: z.string().trim(),
 		password: passwordSchema,
 		confirmPassword: z.string()
 	})
 	.refine((v) => v.password === v.confirmPassword, {
 		message: 'Passwords do not match',
 		path: ['confirmPassword']
+	})
+	.transform((v, ctx) => {
+		const result = normalizePhone(v.phoneDial, v.phoneNumber);
+		if (!result.ok) {
+			ctx.addIssue({
+				code: 'custom',
+				message: phoneErrorMessage(result.reason),
+				path: ['phoneNumber']
+			});
+			return z.NEVER;
+		}
+		return { ...v, phone: result.e164 };
 	});
 
 export const signInSchema = z.object({
@@ -121,10 +181,24 @@ export const createInvitationSchema = z
 		path: ['maxUses']
 	});
 
-export const acceptInvitationSchema = z.object({
-	fullName: fullNameSchema,
-	phone: z.union([phoneSchema, z.literal('')]).optional()
-});
+export const acceptInvitationSchema = z
+	.object({
+		fullName: fullNameSchema,
+		phoneDial: z.string().trim().default('+254'),
+		phoneNumber: z.string().trim()
+	})
+	.transform((v, ctx) => {
+		const result = normalizePhone(v.phoneDial, v.phoneNumber);
+		if (!result.ok) {
+			ctx.addIssue({
+				code: 'custom',
+				message: phoneErrorMessage(result.reason),
+				path: ['phoneNumber']
+			});
+			return z.NEVER;
+		}
+		return { fullName: v.fullName, phone: result.e164 };
+	});
 
 // --------------------------------------------------------------------------
 // Stations

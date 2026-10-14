@@ -71,9 +71,13 @@
 				</p>
 				<div class="mt-3 flex flex-col gap-2 sm:flex-row">
 					<input class="input font-mono text-xs" readonly value={form.link} />
-					<button type="button" class="btn btn-primary shrink-0" onclick={() => copyLink(form.link)}>
+					<button type="button" class="btn btn-secondary shrink-0" onclick={() => copyLink(form.link)}>
 						{copied ? 'Copied' : 'Copy link'}
 					</button>
+					<a href="/app/invitations/{form.invitationId}" class="btn btn-primary shrink-0">
+						<Icon name="scan" size={18} />
+						Show QR code
+					</a>
 				</div>
 
 				{#if form.emailed === 'sent'}
@@ -141,6 +145,13 @@
 							</td>
 							<td data-label="">
 								{#if invitation.status === 'active'}
+								<div class="flex flex-wrap justify-end gap-1">
+									<a
+										href="/app/invitations/{invitation.id}"
+										class="btn btn-ghost !min-h-0 !px-2 !py-1 text-sm"
+									>
+										QR code
+									</a>
 									<form
 										method="POST"
 										action="?/revoke"
@@ -162,6 +173,7 @@
 											Revoke
 										</button>
 									</form>
+								</div>
 								{/if}
 							</td>
 						</tr>

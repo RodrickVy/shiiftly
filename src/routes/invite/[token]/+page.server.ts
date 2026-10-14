@@ -86,7 +86,7 @@ export const actions: Actions = {
 		const { data, error } = await locals.supabase.rpc('accept_invitation', {
 			p_token_hash: tokenHash,
 			p_full_name: parsed.data.fullName,
-			p_phone: parsed.data.phone || null
+			p_phone: parsed.data.phone
 		});
 
 		if (error) {

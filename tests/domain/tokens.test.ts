@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+	deriveInvitationToken,
 	deriveStationToken,
 	hashToken,
+	invitationUrl,
 	randomToken,
 	stationClockUrl,
 	timingSafeEqual
@@ -102,5 +104,48 @@ describe('stationClockUrl', () => {
 		expect(stationClockUrl('https://shiftly.app/', 'abc123')).toBe(
 			'https://shiftly.app/clock/abc123'
 		);
+	});
+});
+
+describe('deriveInvitationToken', () => {
+	const INVITE = 'd3b07384-d9a0-4f1e-9c2b-1a2b3c4d5e6f';
+
+	it('is stable for the same invitation, so the QR can be re-displayed', async () => {
+		const a = await deriveInvitationToken(SECRET, INVITE);
+		const b = await deriveInvitationToken(SECRET, INVITE);
+		expect(a).toBe(b);
+	});
+
+	it('differs between invitations', async () => {
+		const a = await deriveInvitationToken(SECRET, INVITE);
+		const b = await deriveInvitationToken(SECRET, '11111111-2222-3333-4444-555555555555');
+		expect(a).not.toBe(b);
+	});
+
+	it('changes when the secret is rotated', async () => {
+		const a = await deriveInvitationToken(SECRET, INVITE);
+		const b = await deriveInvitationToken(`${SECRET}-rotated`, INVITE);
+		expect(a).not.toBe(b);
+	});
+
+	it('does not leak the invitation id', async () => {
+		const token = await deriveInvitationToken(SECRET, INVITE);
+		expect(token).not.toContain(INVITE);
+		expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
+		expect(token.length).toBeGreaterThanOrEqual(42);
+	});
+
+	/** An invitation token must never collide with a station token. */
+	it('is domain-separated from station tokens', async () => {
+		const invite = await deriveInvitationToken(SECRET, INVITE);
+		const station = await deriveStationToken(SECRET, INVITE, '2026-05-20');
+		expect(invite).not.toBe(station);
+	});
+});
+
+describe('invitationUrl', () => {
+	it('builds the URL an invitation QR encodes', () => {
+		expect(invitationUrl('https://shiftly.app', 'tok')).toBe('https://shiftly.app/invite/tok');
+		expect(invitationUrl('https://shiftly.app/', 'tok')).toBe('https://shiftly.app/invite/tok');
 	});
 });

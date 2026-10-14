@@ -286,6 +286,17 @@ export type NotificationDelivery = {
 	created_at: string;
 }
 
+/** An internal note a manager keeps about someone. Managers only. */
+export type EmployeeNote = {
+	id: string;
+	organization_id: string;
+	employee_membership_id: string;
+	author_user_id: string | null;
+	body: string;
+	created_at: string;
+	updated_at: string;
+}
+
 export type AuditLog = {
 	id: string;
 	organization_id: string;
@@ -324,6 +335,7 @@ export type Database = {
 			payroll_entries: Table<PayrollEntry>;
 			notifications: Table<Notification>;
 			notification_deliveries: Table<NotificationDelivery>;
+			employee_notes: Table<EmployeeNote>;
 			audit_logs: Table<AuditLog>;
 		};
 		Views: { [_ in never]: never };

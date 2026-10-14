@@ -50,6 +50,7 @@ const TABLES = [
 	'organization_memberships',
 	'organization_settings',
 	'clocking_stations',
+	'employee_notes',
 	'organization_daily_tokens',
 	'shifts',
 	'attendance_events',

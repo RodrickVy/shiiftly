@@ -6,7 +6,20 @@ import {
 	parseForm,
 	payRateSchema
 } from '$lib/schemas';
+import { z } from 'zod';
 import { parseAmountToCents } from '$lib/domain/earnings';
+import { zonedWallTimeToUtc } from '$lib/domain/time';
+
+const noteSchema = z.object({
+	body: z.string().trim().min(1, 'Write something first').max(4000)
+});
+
+const quickTaskSchema = z.object({
+	title: z.string().trim().min(1, 'Give the task a title').max(160),
+	description: z.string().trim().max(2000).optional().or(z.literal('')),
+	priority: z.enum(['low', 'medium', 'high']).default('medium'),
+	dueAt: z.union([z.iso.date(), z.literal('')]).optional()
+});
 import { addDays, todayInTimeZone } from '$lib/domain/time';
 import type { Actions, PageServerLoad } from './$types';
 import type { OrganizationMembership, PayRate, Shift, TimeOffRequest } from '$lib/types/database';
@@ -33,7 +46,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const tz = org.organization.timezone;
 	const today = todayInTimeZone(tz);
 
-	const [{ data: shifts }, { data: tasks }, { data: timeOff }, { data: rates }] = await Promise.all([
+	const [{ data: shifts }, { data: tasks }, { data: timeOff }, { data: rates }, { data: notes }] =
+		await Promise.all([
 		locals.supabase
 			.from('shifts')
 			.select('*')
@@ -62,7 +76,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					.select('*')
 					.eq('employee_membership_id', membership.id)
 					.order('effective_from', { ascending: false })
-			: Promise.resolve({ data: null })
+			: Promise.resolve({ data: null }),
+
+		locals.supabase
+			.from('employee_notes')
+			.select('id, body, created_at, author_user_id, profiles:author_user_id(full_name)')
+			.eq('employee_membership_id', membership.id)
+			.order('created_at', { ascending: false })
 	]);
 
 	const shiftRows = (shifts ?? []) as Shift[];
@@ -95,7 +115,23 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			shifts: completed.length,
 			payableMinutes: completed.reduce((t, s) => t + (s.payable_minutes ?? 0), 0)
 		},
-		tasks: tasks ?? [],
+		tasks: (tasks ?? []).map((t) => ({
+			id: t.id,
+			title: t.title,
+			status: t.status,
+			priority: t.priority,
+			dueAt: t.due_at
+		})),
+		notes: (notes ?? []).map((n) => {
+			const author = n.profiles as unknown as { full_name: string } | null;
+			return {
+				id: n.id,
+				body: n.body,
+				createdAt: n.created_at,
+				authorName: author?.full_name ?? 'A manager',
+				isMine: n.author_user_id === org.membership.user_id
+			};
+		}),
 		timeOff: (timeOff ?? []) as TimeOffRequest[],
 		payRates: org.isOwner ? ((rates ?? []) as PayRate[]) : null,
 		canSeePay: org.isOwner,
@@ -174,6 +210,112 @@ export const actions: Actions = {
 		}
 
 		return { rateSaved: true as const };
+	},
+
+	/** Adds an internal note about this person. Managers only, by policy. */
+	addNote: async ({ request, locals, params }) => {
+		const org = locals.org;
+		if (!org?.isManager) throw error(403, 'Managers only.');
+
+		const parsed = parseForm(noteSchema, await request.formData());
+		if (!parsed.ok) return fail(400, formFailure(parsed.errors, parsed.values));
+
+		// Confirm the membership belongs to this organization before writing
+		// a row that references it.
+		const { data: target } = await locals.supabase
+			.from('organization_memberships')
+			.select('id')
+			.eq('id', params.id)
+			.eq('organization_id', org.organization.id)
+			.maybeSingle();
+
+		if (!target) return fail(404, formError('That employee is not in your organization.'));
+
+		const { error: insertError } = await locals.supabase.from('employee_notes').insert({
+			organization_id: org.organization.id,
+			employee_membership_id: params.id,
+			author_user_id: org.membership.user_id,
+			body: parsed.data.body
+		});
+
+		if (insertError) return fail(500, formError('That note could not be saved.'));
+		return { noteAdded: true as const };
+	},
+
+	deleteNote: async ({ request, locals }) => {
+		const org = locals.org;
+		if (!org?.isManager) throw error(403, 'Managers only.');
+
+		const noteId = String((await request.formData()).get('noteId') ?? '');
+
+		const { error: deleteError } = await locals.supabase
+			.from('employee_notes')
+			.delete()
+			.eq('id', noteId)
+			.eq('organization_id', org.organization.id);
+
+		if (deleteError) return fail(500, formError('That note could not be removed.'));
+		return { noteDeleted: true as const };
+	},
+
+	/** Creates a task and assigns it to this person in one step. */
+	assignTask: async ({ request, locals, params }) => {
+		const org = locals.org;
+		if (!org?.isManager) throw error(403, 'Managers only.');
+
+		const parsed = parseForm(quickTaskSchema, await request.formData());
+		if (!parsed.ok) return fail(400, formFailure(parsed.errors, parsed.values));
+
+		const { data: created, error: insertError } = await locals.supabase
+			.from('tasks')
+			.insert({
+				organization_id: org.organization.id,
+				title: parsed.data.title,
+				description: parsed.data.description || null,
+				priority: parsed.data.priority,
+				due_at: parsed.data.dueAt
+					? zonedWallTimeToUtc(parsed.data.dueAt, '17:00:00', org.organization.timezone).toISOString()
+					: null,
+				created_by: org.membership.user_id
+			})
+			.select('id')
+			.single();
+
+		if (insertError || !created) return fail(500, formError('That task could not be created.'));
+
+		const { data, error: assignError } = await locals.supabase.rpc('set_task_assignees', {
+			p_task: created.id,
+			p_memberships: [params.id]
+		});
+
+		const result = data as { ok: boolean; code?: string } | null;
+		if (assignError || !result?.ok) {
+			return fail(400, formError('The task was created, but assigning it failed.'));
+		}
+
+		return { taskAssigned: true as const };
+	},
+
+	updateTaskStatus: async ({ request, locals }) => {
+		const org = locals.org;
+		if (!org?.isManager) throw error(403, 'Managers only.');
+
+		const formData = await request.formData();
+		const taskId = String(formData.get('taskId') ?? '');
+		const status = String(formData.get('status') ?? '');
+
+		if (!['todo', 'in_progress', 'completed', 'cancelled'].includes(status)) {
+			return fail(400, formError('That status is not recognised.'));
+		}
+
+		const { error: updateError } = await locals.supabase
+			.from('tasks')
+			.update({ status: status as 'todo' | 'in_progress' | 'completed' | 'cancelled' })
+			.eq('id', taskId)
+			.eq('organization_id', org.organization.id);
+
+		if (updateError) return fail(500, formError('That task could not be updated.'));
+		return { taskUpdated: true as const };
 	},
 
 	setRole: async ({ request, locals, params }) => {

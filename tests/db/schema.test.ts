@@ -27,6 +27,7 @@ describe('migrations', () => {
 				'audit_logs',
 				'break_records',
 				'clocking_stations',
+				'employee_notes',
 				'idempotency_keys',
 				'notification_deliveries',
 				'notifications',

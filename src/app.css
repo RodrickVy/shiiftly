@@ -37,7 +37,7 @@
 		--text: oklch(0.21 0.015 258);
 		--text-muted: oklch(0.49 0.012 255);
 
-		--ok: oklch(0.52 0.14 153);
+		--ok: oklch(60.459% 0.1566 152.326);
 		--ok-surface: oklch(0.96 0.03 153);
 		--warn: oklch(0.56 0.13 75);
 		--warn-surface: oklch(0.96 0.04 85);

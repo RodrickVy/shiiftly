@@ -55,7 +55,10 @@ create trigger organizations_touch
 create table public.organization_memberships (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations (id) on delete cascade,
-  user_id uuid not null references auth.users (id) on delete cascade,
+  -- References profiles rather than auth.users so PostgREST can embed the
+  -- person's name; profiles.id is itself an auth.users key, so this is the
+  -- same identity with a usable relationship. See 0008 for the full reason.
+  user_id uuid not null references public.profiles (id) on delete cascade,
   role membership_role not null default 'employee',
   -- Someone joining through the link starts pending a manager's decision.
   status membership_status not null default 'pending',

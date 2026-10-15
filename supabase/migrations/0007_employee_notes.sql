@@ -16,7 +16,9 @@ create table public.employee_notes (
   organization_id uuid not null references public.organizations (id) on delete cascade,
   employee_membership_id uuid not null
     references public.organization_memberships (id) on delete cascade,
-  author_user_id uuid references auth.users (id) on delete set null,
+  -- Points at profiles so the author's name can be embedded; SET NULL so
+  -- a note outlives whoever wrote it.
+  author_user_id uuid references public.profiles (id) on delete set null,
   body text not null check (length(btrim(body)) between 1 and 4000),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

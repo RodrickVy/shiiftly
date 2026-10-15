@@ -171,6 +171,15 @@ begin
     return jsonb_build_object('ok', false, 'code', 'invalid_timezone');
   end;
 
+  -- The owner membership below references profiles, so make sure one exists
+  -- rather than relying on the caller having created it.
+  insert into public.profiles (id, full_name, email)
+  select v_user,
+         coalesce(nullif(btrim(split_part(coalesce(u.email, ''), '@', 1)), ''), 'Owner'),
+         coalesce(u.email, '')
+  from auth.users u where u.id = v_user
+  on conflict (id) do nothing;
+
   insert into public.organizations (
     name, industry, country_code, timezone, currency_code,
     week_starts_on, workweek_days, created_by

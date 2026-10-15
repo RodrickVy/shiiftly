@@ -25,6 +25,9 @@ const AUTH_SHIM = `
   create table if not exists auth.users (
     id uuid primary key default gen_random_uuid(),
     email text unique,
+    -- Supabase stores signup metadata here; migrations read it when
+    -- backfilling a display name.
+    raw_user_meta_data jsonb not null default '{}'::jsonb,
     created_at timestamptz not null default now()
   );
 
